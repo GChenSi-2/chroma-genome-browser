@@ -22,3 +22,4 @@ export {
 } from './derived';
 export { theme, toggleTheme, type Theme } from './theme';
 export { parseLocus, formatLocus, type ParseLocusResult } from './locus-parser';
+export { startUrlSync } from './url-sync';
