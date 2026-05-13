@@ -1,14 +1,24 @@
+import { onCleanup, onMount } from 'solid-js';
 import { ThemeToggle } from '~ui/components/ThemeToggle';
+import { Stage } from '~ui/components/Stage';
 import { useGlobalShortcuts } from '~ui/shortcuts/global-shortcuts';
+import { startUrlSync } from '~state/url-sync';
 
 /**
- * App shell — DESIGN_SYSTEM §8.2 empty state.
+ * App shell — M1 viewport navigation.
  *
- * This is the T0.2 placeholder. After M1 the genome view replaces the empty
- * state, and TopBar / TrackPanel / MiniMap mount around it.
+ * Day 1 finisher: empty state retired in favour of a signal-driven Stage
+ * placeholder, and `startUrlSync` is wired so viewport mutations from the
+ * keyboard shortcuts round-trip through the URL hash. Real GenomeView with
+ * a WebGL canvas replaces `<Stage>` once the renderer + tracks land.
  */
 export default function App() {
   useGlobalShortcuts();
+  let disposeUrlSync: () => void = () => {};
+  onMount(() => {
+    disposeUrlSync = startUrlSync();
+  });
+  onCleanup(() => disposeUrlSync());
   return (
     <div class="chroma-shell">
       <header class="chroma-topbar">
@@ -20,21 +30,8 @@ export default function App() {
         <ThemeToggle />
       </header>
 
-      <main class="chroma-stage chroma-empty">
-        <div class="chroma-empty-card">
-          <h1 class="chroma-empty-title">Chroma</h1>
-          <p class="chroma-empty-tagline">
-            A genome browser that respects your time.
-          </p>
-          <ul class="chroma-empty-actions">
-            <li>Load HG002 (Illumina, GRCh38)</li>
-            <li>Load HG002 (PacBio HiFi)</li>
-            <li>Load your URL…</li>
-          </ul>
-          <p class="chroma-empty-hint">
-            Press <kbd>?</kbd> for shortcuts
-          </p>
-        </div>
+      <main class="chroma-stage chroma-stage-host">
+        <Stage />
       </main>
     </div>
   );
