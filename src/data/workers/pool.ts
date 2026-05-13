@@ -135,7 +135,10 @@ export function createWorkerPool(opts: WorkerPoolOptions = {}): WorkerPool {
     const mainPort = channel.port1;
     const workerPort = channel.port2;
 
-    let aborted = signal.aborted;
+    // Explicit annotation: the `if (signal.aborted) throw` above narrows
+    // `signal.aborted` to `false`, which would make TS infer this `let` as
+    // the literal `false` and reject the `= true` assignment below.
+    let aborted: boolean = signal.aborted;
     const onAbort = (): void => {
       aborted = true;
       // Notify worker side; any message triggers its abort flag.
@@ -166,12 +169,16 @@ export function createWorkerPool(opts: WorkerPoolOptions = {}): WorkerPool {
   }
 
   const api: WorkerPool = {
+    // The explicit generic on withAbortPort works around Comlink.Remote
+    // distributing unions through Promise — without it TS would see the BAM
+    // call as `Promise<ReadTile> | Promise<CoverageTile>` and reject the
+    // assignment to `Promise<ReadTile | CoverageTile>`.
     parseBamTile(req, signal) {
       if (disposed) {
         return Promise.reject(new Error('WorkerPool disposed'));
       }
       const target = nextWorker();
-      return withAbortPort(signal, (port) =>
+      return withAbortPort<ReadTile | CoverageTile>(signal, (port) =>
         target.remote.parseBamTile(port, req),
       );
     },
@@ -181,7 +188,7 @@ export function createWorkerPool(opts: WorkerPoolOptions = {}): WorkerPool {
         return Promise.reject(new Error('WorkerPool disposed'));
       }
       const target = nextWorker();
-      return withAbortPort(signal, (port) =>
+      return withAbortPort<SignalTile>(signal, (port) =>
         target.remote.parseBigWigTile(port, req),
       );
     },
@@ -191,7 +198,7 @@ export function createWorkerPool(opts: WorkerPoolOptions = {}): WorkerPool {
         return Promise.reject(new Error('WorkerPool disposed'));
       }
       const target = nextWorker();
-      return withAbortPort(signal, (port) =>
+      return withAbortPort<ReferenceTile>(signal, (port) =>
         target.remote.parseFastaTile(port, req),
       );
     },
@@ -201,7 +208,7 @@ export function createWorkerPool(opts: WorkerPoolOptions = {}): WorkerPool {
         return Promise.reject(new Error('WorkerPool disposed'));
       }
       const target = nextWorker();
-      return withAbortPort(signal, (port) =>
+      return withAbortPort<VariantTile>(signal, (port) =>
         target.remote.parseVcfTile(port, req),
       );
     },
