@@ -1,0 +1,124 @@
+/* App shell — component-scoped styles for src/App.tsx.
+   When TopBar / TrackPanel / GenomeView are split out (T2.D), move these
+   into per-component files and delete this. */
+
+.chroma-shell {
+  display: grid;
+  grid-template-rows: 40px 1fr;
+  height: 100vh;
+  background: var(--surface-0);
+  color: var(--ink-primary);
+}
+
+.chroma-topbar {
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-4);
+  gap: var(--space-3);
+  /* DESIGN_SYSTEM §1: no border-bottom, separation by air alone. */
+}
+
+.chroma-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-weight: var(--weight-medium);
+  font-size: var(--text-md);
+  letter-spacing: -0.01em;
+}
+
+.chroma-mark {
+  width: 12px;
+  height: 12px;
+  background: linear-gradient(135deg, var(--base-A), var(--base-T));
+  display: inline-block;
+  border-radius: 2px;
+}
+
+.chroma-topbar-spacer {
+  flex: 1;
+}
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--ink-secondary);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background-color var(--motion-quick) var(--ease-out),
+    color var(--motion-quick) var(--ease-out);
+}
+.theme-toggle:hover {
+  background: var(--surface-2);
+  color: var(--ink-primary);
+}
+
+.chroma-stage {
+  position: relative;
+  overflow: hidden;
+}
+
+.chroma-empty {
+  display: grid;
+  place-items: center;
+  padding: var(--space-7);
+}
+
+.chroma-empty-card {
+  text-align: left;
+  max-width: 440px;
+  color: var(--ink-secondary);
+  font-size: var(--text-md);
+  line-height: 1.6;
+}
+
+.chroma-empty-title {
+  font-family: var(--font-mono);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-medium);
+  color: var(--ink-primary);
+  margin: 0 0 var(--space-2);
+  letter-spacing: -0.02em;
+}
+
+.chroma-empty-tagline {
+  margin: 0 0 var(--space-5);
+}
+
+.chroma-empty-actions {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 var(--space-5);
+  display: grid;
+  gap: var(--space-1);
+}
+.chroma-empty-actions li {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--ink-tertiary);
+}
+.chroma-empty-actions li::before {
+  content: '• ';
+  color: var(--ink-tertiary);
+}
+
+.chroma-empty-hint {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-tertiary);
+}
+.chroma-empty-hint kbd {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  padding: 1px var(--space-1);
+  background: var(--surface-2);
+  color: var(--ink-secondary);
+  border-radius: 3px;
+}

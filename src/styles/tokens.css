@@ -1,0 +1,133 @@
+/* ----------------------------------------------------------------------------
+ * Chroma design tokens — DESIGN_SYSTEM.md §2, §3, §4, §7
+ *
+ * Hard rules (any UI PR violating these is rejected):
+ *   - No raw hex outside this file (except inside data viz shader code).
+ *   - No font-size outside the --text-* scale.
+ *   - No spacing outside the --space-* scale.
+ *   - Pure black (#000) and pure white (#fff) MUST NOT appear in ink colors.
+ * -------------------------------------------------------------------------- */
+
+:root {
+  /* ─── Surface — grayscale base ─── */
+  --surface-0: #ffffff;
+  --surface-1: #fafafa;
+  --surface-2: #f4f4f5;
+  --surface-3: #e4e4e7;
+
+  /* ─── Ink — text & icons ─── */
+  --ink-primary: #18181b;
+  --ink-secondary: #52525b;
+  --ink-tertiary: #a1a1aa;
+  --ink-disabled: #d4d4d8;
+
+  /* ─── Accent ─── */
+  --accent: #2563eb;
+  --accent-soft: #dbeafe;
+
+  /* ─── Semantic ─── */
+  --danger: #dc2626;
+  --warn: #d97706;
+  --ok: #16a34a;
+
+  /* ─── Data semantic — strand ─── */
+  --strand-forward: #6699cc;
+  --strand-reverse: #cc7a85;
+
+  /* ─── Data semantic — bases (Okabe-Ito anchored) ─── */
+  --base-A: #4caf50;
+  --base-C: #2196f3;
+  --base-G: #ff9800;
+  --base-T: #f44336;
+  --base-N: #9e9e9e;
+
+  /* ─── Data semantic — variants ─── */
+  --var-snv: #e69f00;
+  --var-ins: #56b4e9;
+  --var-del: #cc79a7;
+  --var-mnv: #009e73;
+  --var-sv: #d55e00;
+
+  /* ─── Data semantic — coverage ─── */
+  --cov-fill: #94a3b8;
+  --cov-line: #475569;
+
+  /* ─── Typography — families ─── */
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+
+  /* ─── Typography — scale (no values outside this) ─── */
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 18px;
+  --text-xl: 24px;
+
+  /* ─── Typography — weights ─── */
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  /* ─── Spacing — 8-unit system + 4 for density ─── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  /* ─── Motion ─── */
+  --motion-quick: 120ms;
+  --motion-base: 200ms;
+  --motion-slow: 320ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+
+  /* ─── Track geometry (DESIGN_SYSTEM §5) ─── */
+  --track-h-reference: 20px;
+  --track-h-gene: 32px;
+  --track-h-coverage: 60px;
+  --track-h-pileup-min: 80px;
+  --track-h-pileup-max: 400px;
+  --track-h-vcf: 28px;
+  --track-h-bigwig: 80px;
+  --track-header-width: 160px;
+  --track-gap: 4px;
+
+  /* ─── Focus ring — keyboard-first means this must be visible ─── */
+  --focus-ring: 0 0 0 2px var(--accent);
+}
+
+[data-theme='dark'] {
+  --surface-0: #0a0a0b;
+  --surface-1: #131316;
+  --surface-2: #1c1c20;
+  --surface-3: #2a2a30;
+
+  --ink-primary: #fafafa;
+  --ink-secondary: #a1a1aa;
+  --ink-tertiary: #71717a;
+  --ink-disabled: #3f3f46;
+
+  --accent: #60a5fa;
+  --accent-soft: #1e3a8a;
+
+  --danger: #f87171;
+  --warn: #fbbf24;
+  --ok: #4ade80;
+
+  /* Data semantic colors stay the same across themes — they encode meaning,
+     not theme. */
+}
+
+/* Respect user's reduced-motion preference. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-quick: 0ms;
+    --motion-base: 0ms;
+    --motion-slow: 0ms;
+  }
+}

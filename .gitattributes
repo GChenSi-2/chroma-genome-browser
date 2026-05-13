@@ -1,0 +1,22 @@
+* text=auto eol=lf
+
+*.glsl  text eol=lf
+*.css   text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.html  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+
+*.png   binary
+*.jpg   binary
+*.svg   text eol=lf
+*.bam   binary
+*.bai   binary
+*.tbi   binary
+*.gz    binary
+*.bw    binary
+*.fa    binary
+*.fai   binary

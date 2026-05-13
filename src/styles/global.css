@@ -1,0 +1,68 @@
+@import 'tailwindcss';
+@import './tokens.css';
+
+/* ----------------------------------------------------------------------------
+ * Chroma global resets & base styles.
+ * Keep this file under 100 lines — everything semantic belongs in tokens.css
+ * or in component-local styles.
+ * -------------------------------------------------------------------------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  /* Prevent rubber-band scrolling so wheel-zoom feels like a viewport tool,
+     not page scroll. */
+  overscroll-behavior: none;
+}
+
+body {
+  background: var(--surface-0);
+  color: var(--ink-primary);
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  font-weight: var(--weight-regular);
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+
+  /* No system text selection on chrome — only data elements opt in. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Keyboard focus must always be visible. Mouse focus suppressed. */
+:focus {
+  outline: none;
+}
+:focus-visible {
+  box-shadow: var(--focus-ring);
+  border-radius: 2px;
+}
+
+/* Monospace contexts: locus input, coordinate labels, CIGAR strings. */
+.font-mono,
+code,
+kbd,
+pre {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Theme transition — only on the root vars, fast enough to feel intentional. */
+:root {
+  transition:
+    background-color var(--motion-base) var(--ease-out),
+    color var(--motion-base) var(--ease-out);
+}

@@ -3,7 +3,7 @@
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
     "target": "es2023",
     "module": "esnext",
-    "lib": ["ES2023", "DOM"],
+    "lib": ["ES2023", "DOM", "DOM.Iterable", "WebWorker"],
     "types": ["vite/client"],
     "skipLibCheck": true,
 
@@ -15,12 +15,29 @@
     "noEmit": true,
     "jsx": "preserve",
     "jsxImportSource": "solid-js",
+    "resolveJsonModule": true,
+
+    /* Strictness — HANDOFF §4 hard constraints */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
 
     /* Linting */
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+
+    /* Path aliases for the 4-layer architecture (paths are relative to this file) */
+    "paths": {
+      "~/*": ["./src/*"],
+      "~data/*": ["./src/data/*"],
+      "~render/*": ["./src/render/*"],
+      "~state/*": ["./src/state/*"],
+      "~ui/*": ["./src/ui/*"]
+    }
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["reference-spike", "tests/visual"]
 }
