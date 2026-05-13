@@ -162,8 +162,10 @@
 }
 
 .chroma-stage-placeholder {
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
   padding: var(--space-5);
   background: var(--surface-1);
   color: var(--ink-secondary);
