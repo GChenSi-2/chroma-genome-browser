@@ -1,0 +1,41 @@
+{
+  "name": "chroma",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "A modern, high-performance WebGL2 genome browser",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "bench": "vitest bench --run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@gmod/bam": "^7.1.21",
+    "@gmod/bbi": "^9.0.9",
+    "@gmod/indexedfasta": "^5.0.5",
+    "@gmod/tabix": "^3.3.4",
+    "@gmod/vcf": "^7.0.3",
+    "@preact/signals-core": "^1.14.2",
+    "comlink": "^4.4.2",
+    "lucide-solid": "^1.14.0",
+    "solid-js": "^1.9.12"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@tailwindcss/vite": "^4.3.0",
+    "@types/node": "^24.12.3",
+    "@vitest/web-worker": "^4.1.6",
+    "happy-dom": "^20.9.0",
+    "playwright": "^1.60.0",
+    "tailwindcss": "^4.3.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.0.12",
+    "vite-plugin-solid": "^2.11.12",
+    "vitest": "^4.1.6"
+  }
+}
