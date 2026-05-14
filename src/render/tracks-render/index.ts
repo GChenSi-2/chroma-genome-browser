@@ -16,3 +16,9 @@ export {
   maxAcrossSignalTiles,
   type BigWigRenderer,
 } from './bigwig';
+
+export {
+  createReferenceRenderer,
+  decodePackedBases,
+  type ReferenceRenderer,
+} from './reference';
