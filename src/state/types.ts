@@ -62,6 +62,13 @@ export interface BamTrack extends TrackBase {
   indexUrl: string;
   /** Optional: per-track pileup row cap. Defaults to 200. */
   maxRows?: number;
+  /**
+   * Map the viewport chrom name before sending it to the worker. 1000G
+   * BAMs use bare "20"; hg38 BAMs use "chr20". Auto-prefix in locus-parser
+   * means viewport.chrom usually carries "chr20" — `strip-chr` adapts to
+   * a bare-chrom BAM, `add-chr` is the inverse for already-bare chrom inputs.
+   */
+  chromMap?: 'strip-chr' | 'add-chr';
 }
 
 export interface BigWigTrack extends TrackBase {

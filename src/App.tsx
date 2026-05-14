@@ -29,6 +29,9 @@ const DEMO_TRACK: BamTrack = {
   indexUrl:
     'https://1000genomes.s3.amazonaws.com/phase3/data/HG00096/alignment/HG00096.mapped.ILLUMINA.bwa.GBR.low_coverage.20120522.bam.bai',
   visible: true,
+  // 1000G BAM is bare-chrom ("20") but locus-parser auto-prefixes to "chr20".
+  // Strip the prefix before sending the chrom name to the parser worker.
+  chromMap: 'strip-chr',
 };
 
 export default function App() {
