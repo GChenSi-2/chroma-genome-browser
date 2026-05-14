@@ -10,3 +10,9 @@ export {
   maxAcrossTiles,
   type CoverageRenderer,
 } from './bam-coverage';
+
+export {
+  createBigWigRenderer,
+  maxAcrossSignalTiles,
+  type BigWigRenderer,
+} from './bigwig';
