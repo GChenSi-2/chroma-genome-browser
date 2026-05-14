@@ -90,20 +90,26 @@ export function bamBinSizeForSpan(spanBp: number): BinSize {
 }
 
 /**
- * BigWig — bbi is dense, finer resolution is cheap:
+ * BigWig — same ladder as BAM. Each parser tile occupies one binSize-wide
+ * range and holds `ceil(tileWidth / binSize) = 1` bin, so tile count
+ * dominates the cost; we cap it to a few dozen tiles per viewport.
  *
- *  span (bp)        binSize    rationale
+ *  span (bp)        binSize    tiles (max)    rationale
  *  ─────────────────────────────────────────────────────────────
- *  ≤    50,000        128      ~390 bins, sub-bp detail visible
- *  ≤ 1,000,000      1,024      ~976 bins, smooth coverage
- *  ≤ 10,000,000     8,192      ~1220 bins, chrom-region overview
- *   > 10,000,000    65,536     chrom-overview
+ *  ≤    50,000      1,024      ~50            pileup-resolution signal
+ *  ≤ 1,000,000      8,192      ~122           coverage-resolution signal
+ *  ≤ 10,000,000     65,536     ~152           zoomed-out chrom-region
+ *   > 10,000,000    524,288    sparse         chrom-overview
+ *
+ * If we later want crisper BigWig at fine zoom, the right move is to make
+ * one tile hold many bins (tileWidth != binSize). That's a worker-contract
+ * change tracked for M2-main.
  */
 const BIGWIG_POLICY: ReadonlyArray<PolicyEntry> = [
-  { maxSpan: 50_000, binSize: 128 },
-  { maxSpan: 1_000_000, binSize: 1024 },
-  { maxSpan: 10_000_000, binSize: 8192 },
-  { maxSpan: Number.POSITIVE_INFINITY, binSize: 65_536 },
+  { maxSpan: 50_000, binSize: 1024 },
+  { maxSpan: 1_000_000, binSize: 8192 },
+  { maxSpan: 10_000_000, binSize: 65_536 },
+  { maxSpan: Number.POSITIVE_INFINITY, binSize: 524_288 },
 ];
 
 export function bigWigBinSizeForSpan(spanBp: number): BinSize {

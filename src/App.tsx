@@ -7,7 +7,7 @@ import { startUrlSync } from '~state/url-sync';
 import { startTrackEngine } from '~data/track-engine';
 import { setTracks, tracks } from '~state/tracks';
 import { setViewport } from '~state/viewport';
-import type { BamTrack } from '~state/types';
+import type { BamTrack, BigWigTrack, TrackConfig } from '~state/types';
 
 /**
  * App shell — M2 prep layout.
@@ -23,7 +23,7 @@ import type { BamTrack } from '~state/types';
  * seeded if no tracks were restored from the URL. Default viewport pinned
  * to a small chr20 window for fast first paint.
  */
-const DEMO_TRACK: BamTrack = {
+const DEMO_BAM: BamTrack = {
   id: 'hg00096-1kg-lowcov',
   kind: 'bam',
   label: 'HG00096 · 1000G low-coverage',
@@ -36,6 +36,27 @@ const DEMO_TRACK: BamTrack = {
   chromMap: 'strip-chr',
 };
 
+/**
+ * UCSC phyloP100way (hg19) — whole-genome conservation signal, BigWig.
+ * Chromosome names use the "chrN" convention, matching the viewport's
+ * canonical form, so no chromMap is needed. Both 1000G HG00096 and phyloP
+ * are aligned to hg19/GRCh37, so loci match across the two tracks.
+ *
+ * Reference (FASTA) demo is deferred — @gmod/indexedfasta needs an indexed
+ * .fa + .fai sidecar, and the publicly hosted per-chrom files at UCSC are
+ * gzipped (needs bgzip + .gzi, not plain gzip). A separate hosting step is
+ * required; tracked in M2-main TODO.
+ */
+const DEMO_BIGWIG: BigWigTrack = {
+  id: 'ucsc-phyloP100way-hg19',
+  kind: 'bigwig',
+  label: 'phyloP100way · conservation',
+  url: 'https://hgdownload.soe.ucsc.edu/goldenPath/hg19/phyloP100way/hg19.100way.phyloP100way.bw',
+  visible: true,
+};
+
+const DEMO_TRACKS: ReadonlyArray<TrackConfig> = [DEMO_BIGWIG, DEMO_BAM];
+
 export default function App() {
   useGlobalShortcuts();
   let disposeUrlSync: () => void = () => {};
@@ -46,12 +67,13 @@ export default function App() {
     disposeTrackEngine = startTrackEngine();
 
     if (tracks().length === 0) {
-      setTracks([DEMO_TRACK]);
-      // 1000G uses bare chromosome names (no "chr" prefix). Seed a small
-      // chr20 window with enough reads to exercise the pileup renderer.
+      setTracks(DEMO_TRACKS);
+      // Seed a small chr20 window with enough 1000G reads + phyloP signal to
+      // exercise both pileup + signal renderers on the same viewport.
+      // viewport.chrom uses the canonical "chr20"; BAM's chromMap strips it.
       setViewport((v) => ({
         ...v,
-        chrom: '20',
+        chrom: 'chr20',
         start: 10_000_000n,
         end: 10_010_000n,
       }));
