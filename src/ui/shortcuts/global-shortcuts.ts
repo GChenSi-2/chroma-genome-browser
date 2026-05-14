@@ -2,7 +2,8 @@ import { onCleanup, onMount } from 'solid-js';
 import { toggleTheme } from '~state/theme';
 import { setViewport } from '~state/viewport';
 import { panBy, zoomBy, jumpTo } from '~state/viewport-actions';
-import { parseLocus } from '~state/locus-parser';
+import { setTracks, tracks } from '~state/tracks';
+import { requestFocus } from '~state/ui-focus';
 
 /**
  * Global keyboard shortcuts.
@@ -69,22 +70,58 @@ function zoomToFit(): void {
 }
 
 /**
- * "Go to" — Day 1 stand-in uses `window.prompt`. The proper inline modal
- * lands in T2.D.5 (search palette).
+ * "Go to" — focuses the TopBar locus input via the ui-focus signal.
+ * The input handles parsing, validation, and the viewport mutation.
  */
 function goTo(): void {
-  if (typeof window === 'undefined') return;
-  const input = window.prompt('Go to locus (e.g. chr1:1,000,000-2,000,000)');
-  if (input === null) return;
-  const trimmed = input.trim();
-  if (trimmed.length === 0) return;
-  const parsed = parseLocus(trimmed);
-  if (!parsed.ok) {
-    // No toast system yet (T2.D.7); use window.alert as a temporary surface.
-    window.alert(`Invalid locus: ${parsed.error}`);
-    return;
-  }
-  setViewport((v) => jumpTo(v, parsed.locus.chrom, parsed.locus.start, parsed.locus.end));
+  requestFocus('locus-input');
+}
+
+/**
+ * Pick a "target" track for v/d/Delete shortcuts. With no formal track
+ * selection signal yet (lands with selection rework), use the first
+ * visible track, falling back to the first track outright. Returns null
+ * when no tracks are loaded — caller no-ops.
+ */
+function pickTargetTrack(): { id: string } | null {
+  const list = tracks();
+  if (list.length === 0) return null;
+  const visible = list.find((t) => t.visible);
+  const target = visible ?? list[0];
+  return target ? { id: target.id } : null;
+}
+
+function toggleTargetVisibility(): void {
+  const target = pickTargetTrack();
+  if (!target) return;
+  setTracks((prev) =>
+    prev.map((t) => (t.id === target.id ? { ...t, visible: !t.visible } : t)),
+  );
+}
+
+function duplicateTargetTrack(): void {
+  const target = pickTargetTrack();
+  if (!target) return;
+  setTracks((prev) => {
+    const idx = prev.findIndex((t) => t.id === target.id);
+    if (idx < 0) return prev;
+    const original = prev[idx];
+    if (!original) return prev;
+    // New id: append `-copy` and a short timestamp so multiple dupes don't
+    // collide. ARCHITECTURE §4.1 tracks signal stores TrackConfig; copy
+    // preserves the discriminated-union shape with a spread.
+    const suffix = Date.now().toString(36).slice(-4);
+    const copy = { ...original, id: `${original.id}-copy-${suffix}` };
+    const next = prev.slice();
+    next.splice(idx + 1, 0, copy);
+    return next;
+  });
+}
+
+function removeTargetTrack(): void {
+  const target = pickTargetTrack();
+  if (!target) return;
+  setTracks((prev) => prev.filter((t) => t.id !== target.id));
 }
 
 function showHelpPlaceholder(): void {
@@ -128,6 +165,22 @@ const shortcuts: Shortcut[] = [
     match: (e) => e.key === 'g' && isUnmodified(e),
     run: () => goTo(),
     hint: 'g — go to locus',
+  },
+  // Track operations (DESIGN_SYSTEM §6.2 Track section)
+  {
+    match: (e) => e.key === 'v' && isUnmodified(e),
+    run: () => toggleTargetVisibility(),
+    hint: 'v — toggle track visibility',
+  },
+  {
+    match: (e) => e.key === 'd' && isUnmodified(e),
+    run: () => duplicateTargetTrack(),
+    hint: 'd — duplicate track',
+  },
+  {
+    match: (e) => e.key === 'Delete' && isUnmodified(e),
+    run: () => removeTargetTrack(),
+    hint: 'Delete — remove track',
   },
   // View
   {

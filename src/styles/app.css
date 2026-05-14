@@ -234,3 +234,368 @@
 .chroma-track-status-state[data-state='error'] {
   color: var(--danger);
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   M2 prep — App grid layout (T2.D.1 + T2.D.2)
+   Extends `.chroma-shell` above with columns + named grid areas so TopBar,
+   TrackPanel, and GenomeView slot in without touching the original rule.
+   ───────────────────────────────────────────────────────────────────────── */
+
+.chroma-shell {
+  grid-template-columns: 220px 1fr;
+  grid-template-areas:
+    'topbar topbar'
+    'sidebar main';
+}
+
+.chroma-topbar {
+  grid-area: topbar;
+}
+
+.chroma-track-panel {
+  grid-area: sidebar;
+}
+
+.chroma-main {
+  grid-area: main;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   TopBar (T2.D.1) — editable locus input + meta + icon buttons.
+   ───────────────────────────────────────────────────────────────────────── */
+
+.chroma-topbar-center {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.chroma-locus-input {
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  color: var(--ink-primary);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid transparent;
+  padding: 2px var(--space-1);
+  min-width: 280px;
+  letter-spacing: -0.01em;
+  outline: none;
+  transition: border-color var(--motion-quick) var(--ease-out);
+  caret-color: var(--accent);
+}
+
+.chroma-locus-input::selection {
+  background: var(--accent-soft);
+  color: var(--ink-primary);
+}
+
+.chroma-locus-input:hover {
+  border-bottom-color: var(--surface-3);
+}
+
+.chroma-locus-input:focus,
+.chroma-locus-input:focus-visible {
+  border-bottom-color: var(--accent);
+  box-shadow: none;
+}
+
+.chroma-locus-input--ok:focus,
+.chroma-locus-input--ok:focus-visible {
+  border-bottom-color: var(--accent);
+}
+
+.chroma-locus-input--invalid,
+.chroma-locus-input--invalid:focus,
+.chroma-locus-input--invalid:focus-visible {
+  border-bottom-color: var(--danger);
+}
+
+/* `data-shake` bumps each time Enter hits an invalid value; animation-name
+   is the same but the attribute change re-triggers paint. */
+.chroma-locus-input[data-shake]:not([data-shake='0']) {
+  animation: chroma-shake 200ms var(--ease-out);
+}
+
+@keyframes chroma-shake {
+  0% { transform: translateX(0); }
+  20% { transform: translateX(-3px); }
+  40% { transform: translateX(3px); }
+  60% { transform: translateX(-2px); }
+  80% { transform: translateX(2px); }
+  100% { transform: translateX(0); }
+}
+
+.chroma-locus-meta {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--ink-secondary);
+}
+
+.chroma-topbar-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--ink-secondary);
+  cursor: pointer;
+  border-radius: 4px;
+  transition:
+    background-color var(--motion-quick) var(--ease-out),
+    color var(--motion-quick) var(--ease-out);
+}
+
+.chroma-topbar-icon-btn:hover {
+  background: var(--surface-2);
+  color: var(--ink-primary);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   TrackPanel (T2.D.2) — 220px sidebar with per-track rows.
+   ───────────────────────────────────────────────────────────────────────── */
+
+.chroma-track-panel {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-1);
+  /* DESIGN_SYSTEM §1: no border separator; vertical air alone. */
+  padding: var(--space-3) 0 var(--space-2);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.chroma-track-panel-header {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--ink-tertiary);
+  padding: 0 var(--space-3) var(--space-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.chroma-track-panel-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--track-gap);
+  padding: 0 var(--space-1);
+  min-height: 0;
+}
+
+.chroma-track-panel-empty {
+  padding: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--ink-tertiary);
+}
+
+.chroma-track-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 12px 16px 1fr auto auto auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: 4px;
+  font-size: var(--text-sm);
+  color: var(--ink-primary);
+  cursor: default;
+  transition: background-color var(--motion-quick) var(--ease-out);
+}
+
+.chroma-track-row:hover {
+  background: var(--surface-2);
+}
+
+.chroma-track-row--selected::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+}
+
+.chroma-track-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-tertiary);
+  opacity: 0.3;
+}
+
+.chroma-track-kind {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-secondary);
+}
+
+.chroma-track-label {
+  font-size: var(--text-sm);
+  color: var(--ink-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.chroma-track-row-status {
+  /* Per-row status text; distinct from the legacy bottom-strip class above. */
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-tertiary);
+  text-align: right;
+  white-space: nowrap;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Reset the legacy display:flex inherited from .chroma-track-status above. */
+  display: inline-block;
+  padding: 0;
+}
+
+.chroma-track-row-status[data-state='loading'] {
+  color: var(--accent);
+}
+.chroma-track-row-status[data-state='ready'] {
+  color: var(--ok);
+}
+.chroma-track-row-status[data-state='error'] {
+  color: var(--danger);
+}
+
+.chroma-track-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--ink-secondary);
+  cursor: pointer;
+  border-radius: 3px;
+  transition:
+    background-color var(--motion-quick) var(--ease-out),
+    color var(--motion-quick) var(--ease-out);
+}
+
+.chroma-track-icon-btn:hover {
+  background: var(--surface-3);
+  color: var(--ink-primary);
+}
+
+.chroma-track-menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.chroma-track-menu {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  min-width: 120px;
+  margin: 0;
+  padding: var(--space-1) 0;
+  list-style: none;
+  background: var(--surface-0);
+  border: 1px solid var(--surface-3);
+  border-radius: 4px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  z-index: 10;
+}
+
+.chroma-track-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-1) var(--space-3);
+  background: transparent;
+  border: none;
+  font-size: var(--text-sm);
+  color: var(--ink-primary);
+  cursor: pointer;
+}
+
+.chroma-track-menu-item:hover {
+  background: var(--surface-2);
+}
+
+.chroma-track-panel-footer {
+  padding: var(--space-2) var(--space-2) 0;
+}
+
+.chroma-track-panel-add {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  background: transparent;
+  border: none;
+  color: var(--ink-secondary);
+  font-size: var(--text-sm);
+  font-family: var(--font-ui);
+  cursor: pointer;
+  border-radius: 4px;
+  transition:
+    background-color var(--motion-quick) var(--ease-out),
+    color var(--motion-quick) var(--ease-out);
+}
+
+.chroma-track-panel-add:hover {
+  background: var(--surface-2);
+  color: var(--ink-primary);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   GenomeView canvas skeleton (T2.D.7) — CSS-only shimmer overlay.
+   No JS animation loop; gated by GenomeView's `isLoading()` memo.
+   ───────────────────────────────────────────────────────────────────────── */
+
+.chroma-canvas-skeleton {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(161, 161, 170, 0.12) 50%,
+      transparent 100%
+    );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: chroma-skeleton-shimmer 2s linear infinite;
+}
+
+@keyframes chroma-skeleton-shimmer {
+  0% { background-position: -100% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* The canvas must be inside a positioned container so the skeleton's
+   absolute positioning resolves to the canvas rect, not the viewport.
+   `.chroma-genome-view` is already a grid container above; reusing it
+   keeps geometry stable. */
+.chroma-genome-view {
+  position: relative;
+}
+
