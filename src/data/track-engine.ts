@@ -118,7 +118,7 @@ export function bigWigBinSizeForSpan(spanBp: number): BinSize {
  * mean small windows (≤ 65kb) fetch one tile, larger windows split. Reference
  * fetches are cheap (sequential bytes through .fai), so no ladder is needed.
  */
-const REFERENCE_BIN_SIZE: BinSize = 65_536;
+export const REFERENCE_BIN_SIZE: BinSize = 65_536;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tile index range helper

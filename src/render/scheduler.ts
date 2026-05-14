@@ -2,42 +2,59 @@
  * Render scheduler — RAF loop driven by L3 viewport + tileCache signals.
  *
  * After the M1 debt repayment: the data source is the L3 `tileCache`
- * snapshot, not a side-channel signal. For each visible BAM track:
- *   - scan the cache for ready tiles matching trackId + chrom + viewport
- *     overlap
- *   - dispatch to PileupRenderer (ReadTile payload) or CoverageRenderer
- *     (CoverageTile payload). Mixed payloads on the same track in one
- *     frame are skipped silently — the policy guarantees a single binSize
- *     per (track, viewport), so all tiles for one track share one payload
- *     type.
+ * snapshot, not a side-channel signal. For each visible track:
+ *   - scan the cache for ready tiles matching trackId + chrom + binSize +
+ *     viewport overlap
+ *   - dispatch to the renderer matching tile.payload:
+ *       reads     → PileupRenderer
+ *       coverage  → CoverageRenderer
+ *       signal    → BigWigRenderer (M2 prep)
+ *       reference → ReferenceRenderer (M2 prep)
+ *       variants  → not yet wired (T2.E.2 owns it)
  *
- * Multi-tile composition: each tile is drawn into the same vertical band
- * with the renderer's `draw` called once per tile. Pileup row collisions
- * across tile boundaries are accepted in M1 (M2 main merges).
+ * Per-kind binSize policy comes from `~data/track-engine`. The scheduler
+ * filters tiles by the policy's current binSize so stale tiles from a
+ * different zoom band don't blend with the freshly-fetched ones.
+ *
+ * Multi-tile composition: per-renderer draw is called once per tile. Pileup
+ * row collisions across tile boundaries are accepted in M1+M2-prep — the
+ * drawMerged path is a carry-forward.
  */
 
 import { createEffect, onCleanup } from 'solid-js';
 import { tracks } from '~state/tracks';
 import { tileCache } from '~state/tile-cache';
 import { viewport } from '~state/viewport';
-import { bamBinSizeForSpan } from '~data/track-engine';
+import {
+  bamBinSizeForSpan,
+  bigWigBinSizeForSpan,
+  REFERENCE_BIN_SIZE,
+} from '~data/track-engine';
 import { createGLContext, type GLContext } from '~render/webgl';
 import {
   createPileupRenderer,
   createCoverageRenderer,
+  createBigWigRenderer,
+  createReferenceRenderer,
   maxAcrossTiles,
+  maxAcrossSignalTiles,
   type PileupRenderer,
   type CoverageRenderer,
+  type BigWigRenderer,
+  type ReferenceRenderer,
 } from '~render/tracks-render';
 import type {
   BinSize,
   CoverageTile,
   ReadTile,
+  ReferenceTile,
+  SignalTile,
   TileKey,
   TileStatus,
   Tile,
   Viewport,
   TrackConfig,
+  TrackKind,
 } from '~state/types';
 
 export interface RenderScheduler {
@@ -46,14 +63,31 @@ export interface RenderScheduler {
   dispose(): void;
 }
 
-const TRACK_HEIGHT_PX = 200;
+// ── Per-kind layout — DESIGN_SYSTEM §5 track heights ──────────────────────
+const TRACK_HEIGHT: Record<TrackKind, number> = {
+  reference: 20,
+  bam: 200, // pileup band; coverage uses the same band height
+  bigwig: 80,
+  vcf: 28,
+  gene: 32,
+  bed: 32,
+};
 const TRACK_GAP_PX = 8;
 const TOP_PAD_PX = 16;
 
+// ── Colors from DESIGN_SYSTEM §2.2 ────────────────────────────────────────
 const COVERAGE_FILL: readonly [number, number, number] = [0.581, 0.643, 0.722]; // --cov-fill #94a3b8
+const BIGWIG_FILL: readonly [number, number, number] = [0.400, 0.600, 0.800];   // --strand-forward #6699cc
 
 function tileOverlapsViewport(tile: Tile, v: Viewport): boolean {
   return tile.chrom === v.chrom && tile.end > v.start && tile.start < v.end;
+}
+
+function expectedBinSizeForTrack(kind: TrackKind, span: number): BinSize | null {
+  if (kind === 'bam') return bamBinSizeForSpan(span);
+  if (kind === 'bigwig') return bigWigBinSizeForSpan(span);
+  if (kind === 'reference') return REFERENCE_BIN_SIZE;
+  return null; // vcf / gene / bed — not scheduled this commit
 }
 
 function collectTilesForTrack(
@@ -67,8 +101,6 @@ function collectTilesForTrack(
     if (status.state !== 'ready') continue;
     const tile = status.tile;
     if (tile.trackId !== trackId) continue;
-    // Filter to the policy-chosen binSize for the current viewport so we
-    // don't mix stale pileup tiles with fresh coverage tiles across zoom.
     if (tile.binSize !== expectedBinSize) continue;
     if (!tileOverlapsViewport(tile, v)) continue;
     out.push(tile);
@@ -80,6 +112,8 @@ export function createRenderScheduler(canvas: HTMLCanvasElement): RenderSchedule
   const ctx: GLContext = createGLContext({ canvas });
   const pileupRenderers = new Map<string, PileupRenderer>();
   const coverageRenderers = new Map<string, CoverageRenderer>();
+  const bigwigRenderers = new Map<string, BigWigRenderer>();
+  const referenceRenderers = new Map<string, ReferenceRenderer>();
   let dirty = true;
   let frame = 0;
   let lastMs = 0;
@@ -103,24 +137,52 @@ export function createRenderScheduler(canvas: HTMLCanvasElement): RenderSchedule
     return r;
   };
 
+  const ensureBigWig = (trackId: string): BigWigRenderer => {
+    let r = bigwigRenderers.get(trackId);
+    if (!r) {
+      r = createBigWigRenderer(ctx.gl);
+      bigwigRenderers.set(trackId, r);
+    }
+    return r;
+  };
+
+  const ensureReference = (trackId: string): ReferenceRenderer => {
+    let r = referenceRenderers.get(trackId);
+    if (!r) {
+      r = createReferenceRenderer(ctx.gl);
+      referenceRenderers.set(trackId, r);
+    }
+    return r;
+  };
+
   const drawTrack = (
     track: TrackConfig,
     snapshot: ReadonlyMap<TileKey, TileStatus>,
     v: Viewport,
     yTopPx: number,
-    expectedBinSize: BinSize,
   ): void => {
-    if (track.kind !== 'bam') return;
+    const span = Number(v.end - v.start);
+    const expectedBinSize = expectedBinSizeForTrack(track.kind, span);
+    if (expectedBinSize === null) return;
+
     const trackTiles = collectTilesForTrack(snapshot, track.id, v, expectedBinSize);
     if (trackTiles.length === 0) return;
 
-    // Sort by payload so we don't shuffle GL state across types in one band.
+    // Partition by payload — one band may carry only one payload type given
+    // the per-(track, viewport) binSize policy, but defensive splitting is
+    // cheap and keeps the renderer-state changes ordered.
     const reads: ReadTile[] = [];
     const coverages: CoverageTile[] = [];
+    const signals: SignalTile[] = [];
+    const references: ReferenceTile[] = [];
     for (const tile of trackTiles) {
       if (tile.payload === 'reads') reads.push(tile);
       else if (tile.payload === 'coverage') coverages.push(tile);
+      else if (tile.payload === 'signal') signals.push(tile);
+      else if (tile.payload === 'reference') references.push(tile);
     }
+
+    const bandHeight = TRACK_HEIGHT[track.kind];
 
     if (reads.length > 0) {
       const renderer = ensurePileup(track.id);
@@ -132,7 +194,20 @@ export function createRenderScheduler(canvas: HTMLCanvasElement): RenderSchedule
       const renderer = ensureCoverage(track.id);
       const max = maxAcrossTiles(coverages);
       for (let i = 0; i < coverages.length; i++) {
-        renderer.draw(coverages[i]!, v, yTopPx, TRACK_HEIGHT_PX, max, COVERAGE_FILL);
+        renderer.draw(coverages[i]!, v, yTopPx, bandHeight, max, COVERAGE_FILL);
+      }
+    }
+    if (signals.length > 0) {
+      const renderer = ensureBigWig(track.id);
+      const max = maxAcrossSignalTiles(signals);
+      for (let i = 0; i < signals.length; i++) {
+        renderer.draw(signals[i]!, v, yTopPx, bandHeight, max, BIGWIG_FILL);
+      }
+    }
+    if (references.length > 0) {
+      const renderer = ensureReference(track.id);
+      for (let i = 0; i < references.length; i++) {
+        renderer.draw(references[i]!, v, yTopPx, bandHeight);
       }
     }
   };
@@ -152,19 +227,17 @@ export function createRenderScheduler(canvas: HTMLCanvasElement): RenderSchedule
     const v = viewport();
     const snapshot = tileCache();
     const trackList = tracks();
-    const expectedBinSize = bamBinSizeForSpan(Number(v.end - v.start));
 
     let yOffsetPx = TOP_PAD_PX;
     for (const track of trackList) {
       if (!track.visible) continue;
-      drawTrack(track, snapshot, v, yOffsetPx, expectedBinSize);
-      yOffsetPx += TRACK_HEIGHT_PX + TRACK_GAP_PX;
+      drawTrack(track, snapshot, v, yOffsetPx);
+      yOffsetPx += TRACK_HEIGHT[track.kind] + TRACK_GAP_PX;
     }
 
     lastMs = performance.now() - t0;
   };
 
-  // Re-render on any input change.
   createEffect(() => {
     viewport();
     tileCache();
@@ -173,22 +246,14 @@ export function createRenderScheduler(canvas: HTMLCanvasElement): RenderSchedule
   });
 
   const unsubLost = ctx.onLost(() => {
-    for (const r of pileupRenderers.values()) {
-      try {
-        r.dispose();
-      } catch {
-        /* ignore */
-      }
-    }
+    for (const r of pileupRenderers.values()) try { r.dispose(); } catch { /* ignore */ }
+    for (const r of coverageRenderers.values()) try { r.dispose(); } catch { /* ignore */ }
+    for (const r of bigwigRenderers.values()) try { r.dispose(); } catch { /* ignore */ }
+    for (const r of referenceRenderers.values()) try { r.dispose(); } catch { /* ignore */ }
     pileupRenderers.clear();
-    for (const r of coverageRenderers.values()) {
-      try {
-        r.dispose();
-      } catch {
-        /* ignore */
-      }
-    }
     coverageRenderers.clear();
+    bigwigRenderers.clear();
+    referenceRenderers.clear();
     dirty = true;
   });
 
@@ -199,22 +264,14 @@ export function createRenderScheduler(canvas: HTMLCanvasElement): RenderSchedule
     disposed = true;
     cancelAnimationFrame(frame);
     unsubLost();
-    for (const r of pileupRenderers.values()) {
-      try {
-        r.dispose();
-      } catch {
-        /* ignore */
-      }
-    }
+    for (const r of pileupRenderers.values()) try { r.dispose(); } catch { /* ignore */ }
+    for (const r of coverageRenderers.values()) try { r.dispose(); } catch { /* ignore */ }
+    for (const r of bigwigRenderers.values()) try { r.dispose(); } catch { /* ignore */ }
+    for (const r of referenceRenderers.values()) try { r.dispose(); } catch { /* ignore */ }
     pileupRenderers.clear();
-    for (const r of coverageRenderers.values()) {
-      try {
-        r.dispose();
-      } catch {
-        /* ignore */
-      }
-    }
     coverageRenderers.clear();
+    bigwigRenderers.clear();
+    referenceRenderers.clear();
     ctx.dispose();
   };
 
