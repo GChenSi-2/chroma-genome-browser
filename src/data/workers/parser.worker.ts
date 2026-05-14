@@ -2,9 +2,9 @@
  * Parser worker entry — exposes the ParserApi over Comlink.
  *
  * Per-format status:
- *   - BAM      → implemented (T1.A.3, this commit) via @gmod/bam
- *   - BigWig   → stub (T1.A.4)
- *   - FASTA    → stub (T1.A.5)
+ *   - BAM      → implemented via @gmod/bam (T1.A.3)
+ *   - BigWig   → implemented via @gmod/bbi (T1.A.4, this commit)
+ *   - FASTA    → implemented via @gmod/indexedfasta (T1.A.5, this commit)
  *   - VCF      → stub (T2.E.1)
  *
  * Abort-across-the-boundary protocol:
@@ -12,15 +12,21 @@
  *   to the worker as the first argument. The worker stores `aborted = true`
  *   the moment any message is received on the port; long parsers poll this
  *   flag at I/O boundaries and throw `DOMException('aborted', 'AbortError')`.
+ *
+ * Filehandle wiring (M2 prep):
+ *   - BamFile / BigWig accept `{ url: string }` and build their own
+ *     RemoteFile internally.
+ *   - IndexedFasta only accepts filehandles, so the worker ships a minimal
+ *     `MinimalRemoteFile` class that implements the `read`/`readFile`/`stat`/
+ *     `close` surface IndexedFasta touches, directly over `fetch`. This
+ *     avoids a hard dep on `generic-filehandle2` (currently transitive only;
+ *     see NEEDS_DEPS.md if we'd rather pull it in as a direct dep).
  */
 
 import * as Comlink from 'comlink';
 import { BamFile } from '@gmod/bam';
-// We deliberately pass `bamUrl` / `baiUrl` strings to BamFile rather than
-// constructing `RemoteFile` instances ourselves: `generic-filehandle2` is a
-// transitive dep of @gmod/bam (not a direct one), so importing it would
-// require a package.json change. Internally BamFile builds the same
-// RemoteFile, so this is equivalent at runtime.
+import { BigWig } from '@gmod/bbi';
+import { IndexedFasta } from '@gmod/indexedfasta';
 import type {
   CoverageTile,
   ReadTile,
@@ -69,6 +75,27 @@ function notImplemented(format: string): Error {
   return new Error(
     `${format} parsing not implemented yet — see TWO_DAY_SPRINT T1.A.3-5`,
   );
+}
+
+/**
+ * Bridge our port-driven abort flag to a real AbortController. Libraries
+ * (@gmod/bam, @gmod/bbi, @gmod/indexedfasta) all consume `signal?: AbortSignal`
+ * so this is how we cancel in-flight `fetch()` work inside them. Returns the
+ * signal plus a stop fn the caller must invoke in `finally`.
+ */
+function bridgeAbortWatcher(
+  abortWatcher: { aborted: () => boolean },
+): { signal: AbortSignal; stop: () => void } {
+  const inner = new AbortController();
+  const handle = setInterval(() => {
+    if (abortWatcher.aborted() && !inner.signal.aborted) inner.abort();
+  }, 25);
+  return {
+    signal: inner.signal,
+    stop: (): void => {
+      clearInterval(handle);
+    },
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -264,6 +291,308 @@ async function runBamParse(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// BigWig parsing
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Minimal view of `@gmod/bbi` Feature that the binning loop reads. The
+ * library returns full `Feature` objects with optional `score`/`summary`
+ * extras; we only need start/end/score.
+ */
+interface BigWigFeatureView {
+  start: number;
+  end: number;
+  score?: number;
+}
+
+/**
+ * Aggregate per-feature scores into `bins` using a coverage-weighted mean.
+ *
+ *   bins[i] = Σ (score · overlap_bp) / binSize
+ *
+ * If `@gmod/bbi` returned features from a pre-aggregated zoom level whose
+ * reduction matches `req.binSize`, each feature already represents one bin
+ * and the formula collapses to `score`. For finer source data, multiple
+ * features may overlap a bin and we accumulate. For coarser source data,
+ * one feature may span multiple bins and we distribute by overlap.
+ *
+ * NaN / undefined scores are skipped (defensive: bbi sometimes returns
+ * sparse arrays where missing bins have no `score` property).
+ */
+function aggregateBigWigFeatures(
+  features: ReadonlyArray<BigWigFeatureView>,
+  regionStart: number,
+  regionEnd: number,
+  binSize: number,
+): Float32Array {
+  const nBins = Math.max(0, Math.ceil((regionEnd - regionStart) / binSize));
+  const bins = new Float32Array(nBins);
+  if (nBins === 0) return bins;
+
+  for (const f of features) {
+    const score = typeof f.score === 'number' && Number.isFinite(f.score) ? f.score : NaN;
+    if (Number.isNaN(score)) continue;
+    const s = Math.max(regionStart, f.start);
+    const e = Math.min(regionEnd, f.end);
+    if (e <= s) continue;
+    const firstBin = Math.floor((s - regionStart) / binSize);
+    const lastBin = Math.min(nBins - 1, Math.floor((e - 1 - regionStart) / binSize));
+    for (let b = firstBin; b <= lastBin; b++) {
+      const binLo = regionStart + b * binSize;
+      const binHi = binLo + binSize;
+      const overlap = Math.min(e, binHi) - Math.max(s, binLo);
+      if (overlap <= 0) continue;
+      const cur = bins[b];
+      bins[b] = (cur ?? 0) + (score * overlap) / binSize;
+    }
+  }
+  return bins;
+}
+
+async function runBigWigParse(
+  abortWatcher: { aborted: () => boolean },
+  req: ParseBigWigRequest,
+): Promise<SignalTile> {
+  if (abortWatcher.aborted()) throw abortError();
+
+  const bw = new BigWig({ url: req.url });
+  await bw.getHeader();
+  if (abortWatcher.aborted()) throw abortError();
+
+  const { signal, stop } = bridgeAbortWatcher(abortWatcher);
+  let features: BigWigFeatureView[];
+  try {
+    // `basesPerSpan` selects a coarser zoom level (AGENT_PLAYBOOK 9.2). We
+    // hand bbi the target bin width so it picks a precomputed summary near
+    // that resolution rather than reading the finest unzoomed data.
+    features = (await bw.getFeatures(req.chrom, req.start, req.end, {
+      basesPerSpan: req.binSize,
+      signal,
+    })) as unknown as BigWigFeatureView[];
+  } catch (err) {
+    if (
+      abortWatcher.aborted() ||
+      (err instanceof Error && err.name === 'AbortError')
+    ) {
+      throw abortError();
+    }
+    throw err;
+  } finally {
+    stop();
+  }
+
+  if (abortWatcher.aborted()) throw abortError();
+
+  const values = aggregateBigWigFeatures(
+    features,
+    req.start,
+    req.end,
+    req.binSize,
+  );
+
+  return {
+    key: `:${req.chrom}:${req.binSize}:${Math.floor(req.start / req.binSize)}`,
+    trackId: '',
+    chrom: req.chrom,
+    binSize: req.binSize,
+    binIndex: Math.floor(req.start / req.binSize),
+    start: BigInt(req.start),
+    end: BigInt(req.end),
+    payload: 'signal',
+    values,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FASTA parsing
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Minimal `GenericFilehandle`-compatible class for FASTA over HTTP. We
+ * implement only the operations IndexedFasta actually invokes:
+ *
+ *   - `readFile(opts?)` — fetches the entire body. Used for the .fai sidecar
+ *     (small text, fine to slurp).
+ *   - `read(length, position, opts?)` — fetches a byte range. Used for the
+ *     .fa body during `getSequence`. Maps to a Range request.
+ *   - `stat()` / `close()` — required by the interface; close is a no-op,
+ *     stat returns size from a HEAD or Content-Length on a 0-byte range.
+ *
+ * Note: typed as `unknown` at the IndexedFasta boundary because we do not
+ * import the `GenericFilehandle` type (that would re-introduce the
+ * `generic-filehandle2` dep). The runtime contract holds — IndexedFasta
+ * calls these by name.
+ */
+interface MinimalFilehandleOpts {
+  signal?: AbortSignal;
+  headers?: Record<string, string>;
+}
+
+class MinimalRemoteFile {
+  private url: string;
+  private cachedSize: number | undefined;
+
+  constructor(url: string) {
+    this.url = url;
+  }
+
+  async read(
+    length: number,
+    position: number,
+    opts: MinimalFilehandleOpts = {},
+  ): Promise<Uint8Array> {
+    const end = position + length - 1;
+    const res = await fetch(this.url, {
+      method: 'GET',
+      headers: {
+        ...(opts.headers ?? {}),
+        Range: `bytes=${position}-${end}`,
+      },
+      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+    });
+    if (!res.ok && res.status !== 206) {
+      throw new Error(`fetch ${this.url} failed: ${res.status} ${res.statusText}`);
+    }
+    const buf = await res.arrayBuffer();
+    return new Uint8Array(buf);
+  }
+
+  async readFile(opts: MinimalFilehandleOpts = {}): Promise<Uint8Array> {
+    const res = await fetch(this.url, {
+      method: 'GET',
+      headers: opts.headers ?? {},
+      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+    });
+    if (!res.ok) {
+      throw new Error(`fetch ${this.url} failed: ${res.status} ${res.statusText}`);
+    }
+    const buf = await res.arrayBuffer();
+    return new Uint8Array(buf);
+  }
+
+  async stat(): Promise<{ size: number }> {
+    if (this.cachedSize !== undefined) return { size: this.cachedSize };
+    const res = await fetch(this.url, { method: 'HEAD' });
+    const len = res.headers.get('content-length');
+    const size = len ? Number(len) : 0;
+    this.cachedSize = size;
+    return { size };
+  }
+
+  async close(): Promise<void> {
+    // nothing to release — every read opens its own fetch
+  }
+}
+
+/** Encode a single base char to a 4-bit code. */
+function codeOfBase(ch: string): number {
+  switch (ch) {
+    case 'A':
+    case 'a':
+      return 0;
+    case 'C':
+    case 'c':
+      return 1;
+    case 'G':
+    case 'g':
+      return 2;
+    case 'T':
+    case 't':
+      return 3;
+    default:
+      return 4; // N or any other IUPAC code
+  }
+}
+
+/**
+ * Pack a sequence string into 4 bits per base (one nibble each).
+ *
+ * ARCHITECTURE Sec 3.3 originally specified 2-bit packing — but 2 bits only
+ * encodes ACGT, so N (and any ambiguous IUPAC code) would either alias to a
+ * real base or require an out-of-band sentinel. 4-bit packing is the smallest
+ * representation that fits {A, C, G, T, N} with room for soft-clip / IUPAC
+ * codes in later milestones. Memory cost is 2x the 2-bit scheme; for a 65,536
+ * bp tile this is 32 KB → 16 KB → still well under the cache budget.
+ *
+ * Layout: byte `i >> 1` carries base `i` in the low nibble and base `i+1` in
+ * the high nibble. Odd-length tails leave the high nibble of the last byte
+ * as 0 (interpreted as 'A' — callers must clamp at `baseCount` to avoid
+ * reading the padding).
+ */
+function packReferenceSequence(seq: string): Uint8Array {
+  const packed = new Uint8Array(Math.ceil(seq.length / 2));
+  for (let i = 0; i < seq.length; i++) {
+    const ch = seq.charAt(i);
+    const code = codeOfBase(ch);
+    const byteIdx = i >> 1;
+    if ((i & 1) === 0) {
+      packed[byteIdx] = code;
+    } else {
+      packed[byteIdx] = (packed[byteIdx] ?? 0) | (code << 4);
+    }
+  }
+  return packed;
+}
+
+async function runFastaParse(
+  abortWatcher: { aborted: () => boolean },
+  req: ParseFastaRequest,
+): Promise<ReferenceTile> {
+  if (abortWatcher.aborted()) throw abortError();
+
+  // IndexedFasta's constructor expects `GenericFilehandle` from
+  // generic-filehandle2. We pass a structurally compatible class via a
+  // narrow `unknown` cast — see MinimalRemoteFile above for the contract
+  // and rationale. The cast is local to this construction site.
+  type IFasta = ConstructorParameters<typeof IndexedFasta>[0];
+  const fasta = new IndexedFasta({
+    fasta: new MinimalRemoteFile(req.url) as unknown as NonNullable<IFasta['fasta']>,
+    fai: new MinimalRemoteFile(req.faiUrl) as unknown as NonNullable<IFasta['fai']>,
+  });
+
+  const { signal, stop } = bridgeAbortWatcher(abortWatcher);
+  let seq: string;
+  try {
+    const result = await fasta.getSequence(req.chrom, req.start, req.end, {
+      signal,
+    });
+    seq = result ?? '';
+  } catch (err) {
+    if (
+      abortWatcher.aborted() ||
+      (err instanceof Error && err.name === 'AbortError')
+    ) {
+      throw abortError();
+    }
+    throw err;
+  } finally {
+    stop();
+  }
+
+  if (abortWatcher.aborted()) throw abortError();
+
+  const packed = packReferenceSequence(seq);
+  // For reference tiles we use a fixed conceptual binSize so the cache key
+  // ladder stays consistent; track-engine drives this via REFERENCE_BIN_SIZE.
+  // We mirror that here (65_536) as the binSize encoded in the key/metadata.
+  const binSize = 65_536;
+  const binIndex = Math.floor(req.start / binSize);
+
+  return {
+    key: `:${req.chrom}:${binSize}:${binIndex}`,
+    trackId: '',
+    chrom: req.chrom,
+    binSize,
+    binIndex,
+    start: BigInt(req.start),
+    end: BigInt(req.end),
+    payload: 'reference',
+    packed,
+    baseCount: seq.length,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Comlink-exposed API
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -288,20 +617,20 @@ const api = {
 
   async parseBigWigTile(
     abortPort: MessagePort,
-    _req: ParseBigWigRequest,
+    req: ParseBigWigRequest,
   ): Promise<SignalTile> {
     const w = createAbortWatcher(abortPort);
-    if (w.aborted()) throw abortError();
-    throw notImplemented('BigWig');
+    const tile = await runBigWigParse(w, req);
+    return Comlink.transfer(tile, [tile.values.buffer]) as SignalTile;
   },
 
   async parseFastaTile(
     abortPort: MessagePort,
-    _req: ParseFastaRequest,
+    req: ParseFastaRequest,
   ): Promise<ReferenceTile> {
     const w = createAbortWatcher(abortPort);
-    if (w.aborted()) throw abortError();
-    throw notImplemented('FASTA');
+    const tile = await runFastaParse(w, req);
+    return Comlink.transfer(tile, [tile.packed.buffer]) as ReferenceTile;
   },
 
   async parseVcfTile(
