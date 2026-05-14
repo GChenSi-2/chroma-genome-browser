@@ -22,8 +22,10 @@ export default defineConfig({
     format: 'es',
   },
   server: {
-    port: 5173,
-    strictPort: false,
+    // A parallel project (c2pa-viewer) may hold 5173 — bind 5174 so the
+    // launch.json + preview tooling can deterministically attach.
+    port: 5174,
+    strictPort: true,
   },
   build: {
     target: 'es2023',
