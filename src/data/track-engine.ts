@@ -1,176 +1,245 @@
 /**
- * Track engine — bridges L3 viewport/tracks signals to the worker pool,
- * and writes results to a per-track signal the render layer subscribes to.
+ * Track engine — L1 orchestrator that flows from L3 viewport/tracks signals
+ * to the tile cache via the worker pool.
  *
- * Deviation note (lead, M1 E2E smoke):
- *   This bypasses the lead-written tile cache (src/data/tiles/cache.ts).
- *   The cache keys reads into the BIN_SIZES ladder, which for a typical
- *   pileup-level viewport (1Mb) produces hundreds of micro-tiles, each
- *   triggering its own BAM range read — wasteful for an integration
- *   smoke. M2 prep reintroduces proper tile binning + cache hits +
- *   prefetch. For now: ONE worker request per (track, viewport),
- *   debounced, with abort-on-viewport-change. ARCHITECTURE §2.2 promised
- *   tile binning; this is an explicit interim step.
+ * Architecture compliance (M1 debt repayment, commit `179840d` deviation):
+ *   - Routes results through `~data/tiles` (the lead-written LRU cache)
+ *     instead of a side-channel `trackResults` signal. The L3 `tileCache`
+ *     snapshot signal is the single source of truth for what the render
+ *     layer can draw.
+ *   - Picks a tile binSize from a viewport-span policy (BAM-specific) so
+ *     pileup-level views fetch a handful of 1024-bp tiles and wide views
+ *     fall back to coarser coverage tiles. The generic `binSizeForViewport`
+ *     in derived.ts is unsuited for BAM at fine zoom (it returns 128, which
+ *     would spam the BAI index with sub-chunk queries).
+ *   - One worker request per (track, chrom, binSize, binIndex). Cache
+ *     hits skip the worker entirely; pan with overlap reuses tiles.
+ *
+ * Still deferred:
+ *   - Prefetch ±2 tiles on the leading edge (M2 main)
+ *   - Cross-tile pileup row assignment (M2 main — currently rows reset per
+ *     tile, so reads near tile boundaries can visually overlap)
+ *   - BigWig / VCF / FASTA dispatch (M2 prep when the corresponding workers
+ *     replace their stubs)
  */
 
-import { createEffect, createSignal, onCleanup } from 'solid-js';
+import { createEffect, onCleanup } from 'solid-js';
 import { tracks } from '~state/tracks';
 import { viewport } from '~state/viewport';
 import type {
   BamTrack,
-  CoverageTile,
-  ReadTile,
+  BinSize,
+  TileKey,
+  TileStatus,
+  Tile,
   Viewport,
 } from '~state/types';
+import {
+  formatTileKey,
+  getTileCache,
+  initTileCache,
+  syncTileCacheViewport,
+  type TileCacheController,
+} from './tiles';
 import { createWorkerPool, type WorkerPool } from './workers/pool';
 
-export type TrackDataStatus =
-  | { state: 'idle' }
-  | { state: 'loading' }
-  | { state: 'ready'; tile: ReadTile | CoverageTile; viewport: Viewport }
-  | { state: 'error'; message: string };
+/**
+ * Viewport-span → binSize policy for BAM.
+ *
+ *  span (bp)        binSize    tile type    rationale
+ *  ─────────────────────────────────────────────────────────────
+ *  ≤ 50,000          1,024     ReadTile     pileup view, ~50 tiles max
+ *  ≤ 1,000,000       8,192     CoverageTile coverage histogram
+ *  ≤ 10,000,000     65,536     CoverageTile zoomed-out coverage
+ *   > 10,000,000   524,288     CoverageTile chrom-overview
+ */
+interface BamPolicyEntry {
+  maxSpan: number;
+  binSize: BinSize;
+}
+const BAM_POLICY: ReadonlyArray<BamPolicyEntry> = [
+  { maxSpan: 50_000, binSize: 1024 },
+  { maxSpan: 1_000_000, binSize: 8192 },
+  { maxSpan: 10_000_000, binSize: 65_536 },
+  { maxSpan: Number.POSITIVE_INFINITY, binSize: 524_288 },
+];
 
-/** Map<trackId, current data status>. Render layer reads this. */
-export type TrackResults = ReadonlyMap<string, TrackDataStatus>;
+export function bamBinSizeForSpan(spanBp: number): BinSize {
+  for (const entry of BAM_POLICY) {
+    if (spanBp <= entry.maxSpan) return entry.binSize;
+  }
+  return 4_194_304;
+}
 
-const [trackResults, setTrackResults] = createSignal<TrackResults>(new Map());
+function visibleTileIndexRange(
+  start: bigint,
+  end: bigint,
+  binSize: BinSize,
+): { first: number; last: number } {
+  const binBig = BigInt(binSize);
+  const first = Number(start / binBig);
+  const lastInclusive = end > 0n ? Number((end - 1n) / binBig) : first;
+  return { first, last: lastInclusive };
+}
+
+interface InflightHandle {
+  controller: AbortController;
+  trackId: string;
+}
 
 let pool: WorkerPool | null = null;
+let cache: TileCacheController | null = null;
+let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+let inflight: Map<TileKey, InflightHandle> = new Map();
 
-/** Per-track debounce timers and in-flight aborters. */
-interface PerTrackState {
-  debounceTimer: ReturnType<typeof setTimeout> | null;
-  abortController: AbortController | null;
+const DEBOUNCE_MS = 100;
+
+function abortAllInflight(): void {
+  for (const h of inflight.values()) h.controller.abort();
+  inflight.clear();
+}
+
+function dispatchTrack(
+  track: BamTrack,
+  v: Viewport,
+  c: TileCacheController,
+  p: WorkerPool,
+): void {
+  const span = Number(v.end - v.start);
+  if (!Number.isFinite(span) || span <= 0) return;
+
+  const binSize = bamBinSizeForSpan(span);
+  const { first, last } = visibleTileIndexRange(v.start, v.end, binSize);
+
+  // Build the visible-key set so we can cancel in-flight tiles that scrolled out.
+  const wantedKeys = new Set<TileKey>();
+  for (let binIndex = first; binIndex <= last; binIndex++) {
+    wantedKeys.add(formatTileKey({ trackId: track.id, chrom: v.chrom, binSize, binIndex }));
+  }
+
+  // Abort tiles for this track that are no longer wanted.
+  for (const [key, h] of inflight) {
+    if (h.trackId !== track.id) continue;
+    if (!wantedKeys.has(key)) {
+      h.controller.abort();
+      inflight.delete(key);
+    }
+  }
+
+  for (let binIndex = first; binIndex <= last; binIndex++) {
+    const key = formatTileKey({ trackId: track.id, chrom: v.chrom, binSize, binIndex });
+    if (c.has(key)) continue; // cached (ready / pending / error — never re-fetch in same session)
+    if (inflight.has(key)) continue;
+
+    const controller = new AbortController();
+    inflight.set(key, { controller, trackId: track.id });
+
+    const pendingStatus: TileStatus = { state: 'pending' };
+    c.put(key, pendingStatus);
+
+    const tileStart = binIndex * binSize;
+    const tileEnd = (binIndex + 1) * binSize;
+
+    p
+      .parseBamTile(
+        {
+          url: track.url,
+          indexUrl: track.indexUrl,
+          chrom: v.chrom,
+          start: tileStart,
+          end: tileEnd,
+          binSize,
+        },
+        controller.signal,
+      )
+      .then((rawTile) => {
+        if (controller.signal.aborted) return;
+        // Worker emits trackId='' and a placeholder key; stamp them so the
+        // cache snapshot keys match what the render layer scans for.
+        const tile: Tile = {
+          ...rawTile,
+          trackId: track.id,
+          key,
+          chrom: v.chrom,
+          binSize,
+          binIndex,
+          start: BigInt(tileStart),
+          end: BigInt(tileEnd),
+        };
+        c.put(key, { state: 'ready', tile });
+      })
+      .catch((err: unknown) => {
+        if (controller.signal.aborted) return;
+        const message = err instanceof Error ? err.message : String(err);
+        c.put(key, { state: 'error', message });
+      })
+      .finally(() => {
+        inflight.delete(key);
+      });
+  }
 }
 
 /**
- * Boot the engine. Returns a disposer. Idempotent: calling again before
- * dispose returns the existing pool.
+ * Boot the engine. Idempotent — calling twice without dispose returns the
+ * same pool/cache pair. Solid's createEffect / onCleanup are used, so this
+ * must be invoked from within a render root (App's onMount qualifies).
  */
 export function startTrackEngine(): () => void {
   if (!pool) pool = createWorkerPool();
+  if (!cache) cache = initTileCache();
   const localPool = pool;
-  const perTrack = new Map<string, PerTrackState>();
+  const localCache = cache;
 
-  const update = (id: string, status: TrackDataStatus): void => {
-    setTrackResults((prev) => {
-      const next = new Map(prev);
-      next.set(id, status);
-      return next;
-    });
-  };
-
-  const cancelFor = (id: string): void => {
-    const s = perTrack.get(id);
-    if (!s) return;
-    if (s.debounceTimer) clearTimeout(s.debounceTimer);
-    s.abortController?.abort();
-    s.debounceTimer = null;
-    s.abortController = null;
-  };
-
-  const dispatchBam = (track: BamTrack, v: Viewport): void => {
-    cancelFor(track.id);
-    const s: PerTrackState = perTrack.get(track.id) ?? {
-      debounceTimer: null,
-      abortController: null,
-    };
-    perTrack.set(track.id, s);
-
-    update(track.id, { state: 'loading' });
-
-    s.debounceTimer = setTimeout(() => {
-      s.debounceTimer = null;
-      const ac = new AbortController();
-      s.abortController = ac;
-
-      // Use binSize 1024 to force ReadTile path (parser returns coverage
-      // when binSize ≥ 8192). Range = full viewport, lo32 safe at
-      // human-genome scale because viewport spans are well under 2^31.
-      const start = Number(v.start);
-      const end = Number(v.end);
-      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
-        update(track.id, { state: 'error', message: 'invalid viewport range' });
-        return;
-      }
-
-      localPool
-        .parseBamTile(
-          {
-            url: track.url,
-            indexUrl: track.indexUrl,
-            chrom: v.chrom,
-            start,
-            end,
-            binSize: 1024,
-          },
-          ac.signal,
-        )
-        .then((tile) => {
-          if (ac.signal.aborted) return;
-          update(track.id, { state: 'ready', tile, viewport: v });
-        })
-        .catch((err: unknown) => {
-          if (ac.signal.aborted) return;
-          const message = err instanceof Error ? err.message : String(err);
-          update(track.id, { state: 'error', message });
-        });
-    }, 200);
-  };
-
-  // React to viewport / tracks changes.
   createEffect(() => {
     const v = viewport();
-    const list = tracks();
+    // Subscribe to tracks() for re-firing on add/remove/visibility-toggle.
+    // We re-read the value inside the debounced callback so we always use
+    // the freshest list, not whatever was captured at effect-fire time.
+    tracks();
 
-    // Drop results for tracks that no longer exist.
-    const liveIds = new Set(list.map((t) => t.id));
-    setTrackResults((prev) => {
-      let changed = false;
-      const next = new Map(prev);
-      for (const id of next.keys()) {
-        if (!liveIds.has(id)) {
-          next.delete(id);
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-    for (const id of perTrack.keys()) {
-      if (!liveIds.has(id)) {
-        cancelFor(id);
-        perTrack.delete(id);
-      }
-    }
+    // Tell the cache about the current viewport so eviction prefers far tiles.
+    syncTileCacheViewport(v);
 
-    for (const track of list) {
-      if (!track.visible) {
-        cancelFor(track.id);
-        update(track.id, { state: 'idle' });
-        continue;
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      debounceTimer = null;
+      // Re-read fresh values (these reads are outside the effect's tracking
+      // scope because we're inside setTimeout).
+      const vNow = viewport();
+      const listNow = tracks();
+      for (const track of listNow) {
+        if (!track.visible) continue;
+        if (track.kind !== 'bam') continue;
+        dispatchTrack(track, vNow, localCache, localPool);
       }
-      if (track.kind !== 'bam') {
-        // BigWig / FASTA / VCF not wired into this E2E smoke — silent skip
-        // so they don't litter the result map with `error`.
-        continue;
-      }
-      dispatchBam(track, v);
-    }
+    }, DEBOUNCE_MS);
   });
 
-  onCleanup(() => {
-    for (const id of perTrack.keys()) cancelFor(id);
-    perTrack.clear();
+  const dispose = (): void => {
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+      debounceTimer = null;
+    }
+    abortAllInflight();
     pool?.dispose();
     pool = null;
-  });
-
-  return () => {
-    for (const id of perTrack.keys()) cancelFor(id);
-    perTrack.clear();
-    pool?.dispose();
-    pool = null;
+    // The cache itself is kept across reboots — the singleton holds the data.
+    // If a full reset is needed, callers should disposeTileCache() separately.
   };
+
+  onCleanup(dispose);
+  return dispose;
 }
 
-export { trackResults };
+/** Diagnostic: current in-flight tile count. */
+export function inflightCount(): number {
+  return inflight.size;
+}
+
+/**
+ * Helper for tests / dev: snapshot the tile cache via the singleton.
+ * Render layer should subscribe to the L3 `tileCache` signal instead.
+ */
+export function snapshotTiles(): ReadonlyMap<TileKey, TileStatus> {
+  return getTileCache().snapshot();
+}

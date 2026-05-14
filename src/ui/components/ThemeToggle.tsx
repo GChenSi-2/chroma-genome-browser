@@ -1,5 +1,8 @@
 import { Show } from 'solid-js';
-import { Moon, Sun } from 'lucide-solid';
+// Per-icon imports — `import { Moon } from 'lucide-solid'` pulls 1000+
+// icon modules through Vite's dev server (no pre-bundling on a barrel).
+import Moon from 'lucide-solid/icons/moon';
+import Sun from 'lucide-solid/icons/sun';
 import { theme, toggleTheme } from '~state/theme';
 
 export function ThemeToggle() {
