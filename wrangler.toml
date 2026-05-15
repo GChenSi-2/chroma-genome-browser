@@ -1,0 +1,5 @@
+# Cloudflare Pages config — alternative deploy target to Vercel.
+# Run `pnpm build` then `npx wrangler pages deploy dist` from this dir.
+name = "chroma"
+compatibility_date = "2025-01-01"
+pages_build_output_dir = "dist"
