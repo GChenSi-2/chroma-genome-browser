@@ -186,11 +186,12 @@ export function createReferenceRenderer(gl: WebGL2RenderingContext): ReferenceRe
 
     gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
     const byteLen = baseCount * STRIDE;
-    if (byteLen > instCapacityBytes) {
-      const cap = 1 << Math.ceil(Math.log2(byteLen));
-      gl.bufferData(gl.ARRAY_BUFFER, cap, gl.DYNAMIC_DRAW);
-      instCapacityBytes = cap;
-    }
+    // Orphan every draw — see bam-pileup.ts for rationale.
+    const cap = byteLen > instCapacityBytes
+      ? 1 << Math.ceil(Math.log2(byteLen))
+      : instCapacityBytes;
+    gl.bufferData(gl.ARRAY_BUFFER, cap, gl.DYNAMIC_DRAW);
+    instCapacityBytes = cap;
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, scratch, 0, neededFloats);
 
     program.use();

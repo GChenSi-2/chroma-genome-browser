@@ -272,14 +272,21 @@ export function createPileupRenderer(
     const originLo = Number(viewport.start & 0xffffffffn);
     packInstances(tile, rows, originLo, scratchFloat, scratchUint!);
 
-    // d. Upload — orphan via `bufferData` only when capacity grew.
+    // d. Upload — orphan the buffer EVERY draw so multi-tile frames don't race.
+    //    Previously bufferData() ran only on capacity growth and successive
+    //    draws shared one backing store; the GPU could still be reading the
+    //    buffer from a queued draw when bufferSubData() overwrote it with the
+    //    NEXT tile's reads, mixing instance data across tiles. The classic
+    //    WebGL fix is to orphan via bufferData(size, usage) before each upload
+    //    — that signals the driver to allocate a fresh backing store, breaking
+    //    the dependency on prior draws.
     gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
     const byteLen = tile.count * BYTES_PER_INSTANCE;
-    if (byteLen > instCapacityBytes) {
-      const cap = 1 << Math.ceil(Math.log2(byteLen));
-      gl.bufferData(gl.ARRAY_BUFFER, cap, gl.DYNAMIC_DRAW);
-      instCapacityBytes = cap;
-    }
+    const cap = byteLen > instCapacityBytes
+      ? 1 << Math.ceil(Math.log2(byteLen))
+      : instCapacityBytes;
+    gl.bufferData(gl.ARRAY_BUFFER, cap, gl.DYNAMIC_DRAW);
+    instCapacityBytes = cap;
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, scratchFloat, 0, neededFloats);
 
     // e. Set uniforms.

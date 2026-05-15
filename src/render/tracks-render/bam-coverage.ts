@@ -143,11 +143,13 @@ export function createCoverageRenderer(gl: WebGL2RenderingContext): CoverageRend
 
     gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
     const byteLen = binCount * STRIDE;
-    if (byteLen > instCapacityBytes) {
-      const cap = 1 << Math.ceil(Math.log2(byteLen));
-      gl.bufferData(gl.ARRAY_BUFFER, cap, gl.DYNAMIC_DRAW);
-      instCapacityBytes = cap;
-    }
+    // Orphan every draw so multi-tile frames don't share a backing store with
+    // in-flight previous draws. See bam-pileup.ts for the long-form note.
+    const cap = byteLen > instCapacityBytes
+      ? 1 << Math.ceil(Math.log2(byteLen))
+      : instCapacityBytes;
+    gl.bufferData(gl.ARRAY_BUFFER, cap, gl.DYNAMIC_DRAW);
+    instCapacityBytes = cap;
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, buf, 0, neededFloats);
 
     program.use();

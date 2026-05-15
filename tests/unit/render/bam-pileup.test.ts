@@ -265,15 +265,15 @@ describe('createPileupRenderer', () => {
     r.dispose();
   });
 
-  it('grows instance buffer via bufferData only on capacity bump', () => {
+  it('orphans the instance buffer on every draw to break cross-tile races', () => {
     const { gl, log } = fakeGL();
     const r = createPileupRenderer(gl);
-    // The renderer always calls bufferData once for the static quad at
-    // construction time; subsequent counts only re-orphan when we exceed
-    // the previous power-of-two capacity.
+    // The renderer calls bufferData once for the static quad at construction;
+    // every subsequent draw orphans the per-instance buffer via bufferData so
+    // queued draws on the same buffer don't see overwritten contents from a
+    // later draw in the same frame. See the inline note in `bam-pileup.ts`.
     const before = log.bufferData;
 
-    // First draw: 4 reads — allocates capacity for first time.
     r.draw(makeTile([
       { start: 0, len: 50 },
       { start: 100, len: 50 },
@@ -283,14 +283,14 @@ describe('createPileupRenderer', () => {
     const afterFirst = log.bufferData;
     expect(afterFirst).toBeGreaterThan(before);
 
-    // Second draw same size: must not re-allocate.
+    // Second draw same size: still orphans (count bumps by exactly 1).
     r.draw(makeTile([
       { start: 0, len: 50 },
       { start: 100, len: 50 },
       { start: 200, len: 50 },
       { start: 300, len: 50 },
     ]), makeViewport(0n, 1000n), 0);
-    expect(log.bufferData).toBe(afterFirst);
+    expect(log.bufferData).toBe(afterFirst + 1);
     r.dispose();
   });
 
