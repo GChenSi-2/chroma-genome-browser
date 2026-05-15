@@ -120,3 +120,36 @@ export function genomicToPx(
   const spanBp = Number(viewport.end - viewport.start);
   return (delta / spanBp) * viewport.pxWidth;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Domain helpers — normalized 0..1 mapping against an arbitrary Locus range.
+//
+// Used by the RangeSelectionBar to express "where inside the contextRange is
+// the current viewport" without baking pixel widths into the math. Pure
+// functions; no signals, no DOM.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface DomainRange {
+  start: GenomicCoord;
+  end: GenomicCoord;
+}
+
+/** 0 at range.start, 1 at range.end. Clamped to [0, 1]. */
+export function contextToFraction(pos: GenomicCoord, range: DomainRange): number {
+  if (range.end <= range.start) return 0;
+  const offset = pos - range.start;
+  const span = range.end - range.start;
+  // Both are <= 3e9 (genome scale); Number cast is safe.
+  const frac = Number(offset) / Number(span);
+  if (frac < 0) return 0;
+  if (frac > 1) return 1;
+  return frac;
+}
+
+/** Inverse of contextToFraction. fraction is clamped to [0, 1] before mapping. */
+export function fractionToContext(fraction: number, range: DomainRange): GenomicCoord {
+  const f = fraction < 0 ? 0 : fraction > 1 ? 1 : fraction;
+  const span = range.end - range.start;
+  const offset = BigInt(Math.round(Number(span) * f));
+  return range.start + offset;
+}

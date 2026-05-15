@@ -599,3 +599,65 @@
   position: relative;
 }
 
+
+
+/* -------------------------------------------------------------------------
+   RangeSelectionBar -- DAW-style overview ruler above all tracks.
+
+   The bar represents `contextRange` (typically the full chromosome). The
+   selection rectangle is the current viewport, draggable to move, with
+   left/right edge handles to resize. Empty-space drag creates a new
+   selection from scratch.
+
+   Geometry comes entirely from selectionFraction()/cursor() in the
+   component; this stylesheet handles only color, padding, and the edge
+   affordance. No transition on left/width -- drag responsiveness wins
+   over animation polish.
+   ------------------------------------------------------------------------- */
+
+.chroma-range-bar {
+  position: relative;
+  height: 28px;
+  flex: 0 0 28px;
+  background: var(--surface-1);
+  user-select: none;
+  touch-action: none;
+  /* Subtle inset so the bar reads as "below" the topbar without a border. */
+  padding: 4px var(--space-3);
+}
+
+.chroma-range-bar-track {
+  position: absolute;
+  inset: 8px var(--space-3) 8px var(--space-3);
+  background: var(--surface-2);
+  border-radius: 2px;
+}
+
+.chroma-range-bar-selection {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  /* The inner border-radius and 1-px line look right against the track
+     and survive both themes via the accent token. */
+}
+
+.chroma-range-bar-edge {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 6px;
+  cursor: ew-resize;
+  /* Edge handles are invisible but pickable; a 1-px accent rule on the
+     parent's border already shows the actual line. */
+}
+
+.chroma-range-bar-edge--start {
+  left: -3px;
+}
+
+.chroma-range-bar-edge--end {
+  right: -3px;
+}

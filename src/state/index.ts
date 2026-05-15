@@ -23,5 +23,15 @@ export {
 export { theme, toggleTheme, type Theme } from './theme';
 export { parseLocus, formatLocus, type ParseLocusResult } from './locus-parser';
 export { startUrlSync } from './url-sync';
-export { panBy, zoomBy, jumpTo, clampViewport } from './viewport-actions';
+export {
+  panBy,
+  zoomBy,
+  jumpTo,
+  clampViewport,
+  clampViewportToContext,
+  panBpWithin,
+  resizeViewportEdge,
+  setViewportSpan,
+} from './viewport-actions';
 export { onRequestFocus, requestFocus, type FocusTarget } from './ui-focus';
+export { contextRange, setContextRange, defaultContextRange } from './context-range';

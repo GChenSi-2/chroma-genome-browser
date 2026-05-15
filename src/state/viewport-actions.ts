@@ -1,4 +1,4 @@
-import type { Viewport } from './types';
+import type { Locus, Viewport } from './types';
 
 /**
  * Viewport actions — pure functions that compute the *next* viewport from
@@ -132,4 +132,103 @@ export function jumpTo(
     start,
     end,
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Context-aware variants — clamp inside a Locus "domain" instead of the global
+// [0, MAX_SPAN] envelope. Used by RangeSelectionBar and Shift+wheel pan.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Clamp the viewport so its [start, end) sits entirely inside `range`,
+ * preserving span length. If the viewport span exceeds the range span,
+ * shrink to fit (start = range.start, end = range.end).
+ *
+ * Off-chromosome viewport is returned unchanged — caller decides whether
+ * to jump to the right chrom.
+ */
+export function clampViewportToContext(v: Viewport, range: Locus): Viewport {
+  if (v.chrom !== range.chrom) return v;
+
+  const span = v.end - v.start;
+  const rangeSpan = range.end - range.start;
+
+  let start = v.start;
+  let end = v.end;
+
+  if (span >= rangeSpan) {
+    start = range.start;
+    end = range.end;
+  } else {
+    if (start < range.start) {
+      start = range.start;
+      end = start + span;
+    }
+    if (end > range.end) {
+      end = range.end;
+      start = end - span;
+    }
+  }
+
+  if (start === v.start && end === v.end) return v;
+  return { ...v, start, end };
+}
+
+/**
+ * Pan the viewport by an explicit bp delta, clamped to a context range.
+ * Returns the input unchanged when delta is 0 or the move is fully clipped.
+ */
+export function panBpWithin(v: Viewport, deltaBp: bigint, range: Locus): Viewport {
+  if (deltaBp === 0n) return v;
+  return clampViewportToContext(
+    { ...v, start: v.start + deltaBp, end: v.end + deltaBp },
+    range,
+  );
+}
+
+/**
+ * Move ONE edge of the viewport. Used by RangeSelectionBar's edge resize.
+ * The opposite edge stays put; the moving edge is clamped against both the
+ * context range AND a minimum-span floor so the viewport can't collapse.
+ *
+ * `side === 'start'`: new start position; clamped to [range.start, end-MIN_SPAN].
+ * `side === 'end'`:   new end position;   clamped to [start+MIN_SPAN, range.end].
+ */
+export function resizeViewportEdge(
+  v: Viewport,
+  side: 'start' | 'end',
+  newPos: bigint,
+  range: Locus,
+): Viewport {
+  if (v.chrom !== range.chrom) return v;
+  if (side === 'start') {
+    const min = range.start;
+    const max = v.end - MIN_SPAN;
+    let start = newPos < min ? min : newPos > max ? max : newPos;
+    if (start === v.start) return v;
+    return clampViewportToContext({ ...v, start }, range);
+  }
+  const min = v.start + MIN_SPAN;
+  const max = range.end;
+  let end = newPos < min ? min : newPos > max ? max : newPos;
+  if (end === v.end) return v;
+  return clampViewportToContext({ ...v, end }, range);
+}
+
+/**
+ * Set BOTH edges at once. Used by RangeSelectionBar's drag-to-create.
+ * The smaller value becomes start, larger becomes end; a MIN_SPAN floor is
+ * enforced and the result is clamped to the context range.
+ */
+export function setViewportSpan(
+  v: Viewport,
+  a: bigint,
+  b: bigint,
+  range: Locus,
+): Viewport {
+  if (v.chrom !== range.chrom) return v;
+  let start = a < b ? a : b;
+  let end = a < b ? b : a;
+  if (end - start < MIN_SPAN) end = start + MIN_SPAN;
+  return clampViewportToContext({ ...v, start, end }, range);
 }
