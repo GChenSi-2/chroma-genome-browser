@@ -38,3 +38,5 @@ coverage/
 # Sub-agent scratchpads
 NEEDS_DEPS.md
 BLOCKED.md
+
+.vercel

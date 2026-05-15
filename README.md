@@ -4,6 +4,8 @@ A modern WebGL2 genome browser. Tile-cached, signal-driven, keyboard-first.
 Built in a two-day sprint as an IGV.js alternative for genomics and clinical
 report embedding.
 
+**Live demo:** [chroma-delta.vercel.app](https://chroma-delta.vercel.app)
+
 ```
 [■] Chroma — a genome browser that respects your time.
 ```
