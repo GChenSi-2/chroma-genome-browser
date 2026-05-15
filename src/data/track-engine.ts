@@ -2,36 +2,31 @@
  * Track engine — L1 orchestrator that flows from L3 viewport/tracks signals
  * to the tile cache via the worker pool.
  *
- * Architecture compliance (M1 debt repayment, commit `179840d` deviation):
- *   - Routes results through `~data/tiles` (the lead-written LRU cache)
- *     instead of a side-channel `trackResults` signal. The L3 `tileCache`
- *     snapshot signal is the single source of truth for what the render
- *     layer can draw.
- *   - Picks a tile binSize from a viewport-span policy (per-kind) so
- *     pileup-level views fetch a handful of 1024-bp tiles and wide views
- *     fall back to coarser coverage/signal tiles. The generic
- *     `binSizeForViewport` in derived.ts is unsuited for BAM at fine zoom
- *     (it returns 128, which would spam the BAI index with sub-chunk queries).
- *   - One worker request per (track, chrom, binSize, binIndex). Cache
- *     hits skip the worker entirely; pan with overlap reuses tiles.
+ * Pipeline:
+ *   1. createEffect subscribes to viewport + tracks signals
+ *   2. 100 ms debounce coalesces bursts (e.g. boot-time signal cascades)
+ *   3. For each visible track, dispatch via the per-kind `Dispatcher`
+ *      (uses the shared `policyFor` ladder from `./tile-policy`).
+ *   4. Per tile in the viewport: cache.has? skip. inflight? skip.
+ *      Otherwise: cache.put('pending'), call worker, cache.put('ready' | 'error').
+ *   5. Render scheduler picks up the snapshot via the L3 `tileCache` signal.
  *
- * M2-prep additions (this commit):
- *   - `dispatchBigWigTrack` + `bigWigBinSizeForSpan` — signal tiles for the
- *     coverage/overview semantic levels. BigWig benefits from finer
- *     resolution than BAM because bbi is dense.
- *   - `dispatchReferenceTrack` — single 65_536-bp tile per viewport for
- *     base-resolution FASTA. Reference fetches are cheap so a fixed binSize
- *     is fine.
- *   - `chromMap` on BamTrack: viewport.chrom may carry the locus-parser
- *     auto-prefix ("chr20"); some BAMs use bare ("20"). The transform is
- *     applied to what we send the worker; the cache key still uses the
- *     outside-facing `v.chrom` so render finds tiles by viewport chrom.
+ * Architecture notes (M2-prep refactor, this commit):
+ *   - Span → (binSize, tileWidthBp) ladders live in `tile-policy.ts`. Both
+ *     this module and the render scheduler read from `policyFor` so they
+ *     can't drift apart.
+ *   - The three previous dispatchers (`dispatchBamTrack`,
+ *     `dispatchBigWigTrack`, `dispatchReferenceTrack`) shared ~50 lines of
+ *     loop+abort+cache scaffolding. They're now a single
+ *     `runTileDispatch<T, R>` template — each kind contributes a tiny spec
+ *     (worker call + request builder). New track kinds add ~15 lines
+ *     instead of duplicating the template.
  *
  * Still deferred:
- *   - Prefetch ±2 tiles on the leading edge (M2 main)
- *   - Cross-tile pileup row assignment (M2 main — currently rows reset per
- *     tile, so reads near tile boundaries can visually overlap)
- *   - VCF / gene / bed dispatch (T2.E.1 + M2 main)
+ *   - Prefetch ±N tiles on the leading edge of a pan
+ *   - URL-hash sticky worker routing (warmer per-worker parser caches)
+ *   - Cross-tile pileup row assignment
+ *   - VCF / gene / bed dispatch (parsers stubbed; T2.E.1+)
  */
 
 import { createEffect, onCleanup } from 'solid-js';
@@ -39,111 +34,37 @@ import { tracks } from '~state/tracks';
 import { viewport } from '~state/viewport';
 import type {
   BamTrack,
-  BigWigTrack,
-  BinSize,
   ReferenceTrack,
   TileKey,
-  TileStatus,
   Tile,
+  TrackConfig,
   Viewport,
 } from '~state/types';
 import {
   formatTileKey,
-  getTileCache,
   initTileCache,
   syncTileCacheViewport,
+  getTileCache,
   type TileCacheController,
 } from './tiles';
+import { policyFor, type TilePolicy } from './tile-policy';
 import { createWorkerPool, type WorkerPool } from './workers/pool';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Span → (binSize, tileWidthBp) policies (one per data kind)
-//
-// `binSize` = resolution: bp per coverage/signal sample inside the tile.
-// `tileWidthBp` = fetch granularity: bp covered by one whole tile.
-//
-// Decoupling them is the key fix for B1 cold load: a 1 Mb viewport at
-// binSize 8192 used to spawn 122 one-bin tiles (one BAI query each, 30 s+);
-// at tileWidthBp 512 kb the same view fetches 2 tiles each holding 64 bins.
-// ─────────────────────────────────────────────────────────────────────────────
-
-interface PolicyEntry {
-  maxSpan: number;
-  binSize: BinSize;
-  /** Fetch granularity — must be >= binSize and a multiple of it. */
-  tileWidthBp: number;
-}
-
-/**
- * BAM:
- *
- *  span (bp)        binSize    tileWidthBp    tiles/viewport
- *  ──────────────────────────────────────────────────────────
- *  ≤ 50,000          1,024     32,768           ≤ 3
- *  ≤ 1,000,000       8,192    524,288           ≤ 3
- *  ≤ 10,000,000     65,536  4,194,304           ≤ 3
- *   > 10,000,000   524,288 33,554,432           1-2
- */
-const BAM_POLICY: ReadonlyArray<PolicyEntry> = [
-  { maxSpan: 50_000, binSize: 1024, tileWidthBp: 32_768 },
-  { maxSpan: 1_000_000, binSize: 8192, tileWidthBp: 524_288 },
-  { maxSpan: 10_000_000, binSize: 65_536, tileWidthBp: 4_194_304 },
-  { maxSpan: Number.POSITIVE_INFINITY, binSize: 524_288, tileWidthBp: 33_554_432 },
-];
-
-function bamPolicyForSpan(spanBp: number): PolicyEntry {
-  for (const entry of BAM_POLICY) {
-    if (spanBp <= entry.maxSpan) return entry;
-  }
-  return BAM_POLICY[BAM_POLICY.length - 1]!;
-}
-
-export function bamBinSizeForSpan(spanBp: number): BinSize {
-  return bamPolicyForSpan(spanBp).binSize;
-}
-export function bamTileWidthForSpan(spanBp: number): number {
-  return bamPolicyForSpan(spanBp).tileWidthBp;
-}
-
-/**
- * BigWig — same ladder as BAM. bbi is dense so we COULD afford finer
- * binSize at fine zoom, but the bottleneck is per-tile network overhead;
- * matching BAM keeps total tile count low and lets the cache share
- * cardinality across kinds.
- */
-const BIGWIG_POLICY: ReadonlyArray<PolicyEntry> = [
-  { maxSpan: 50_000, binSize: 1024, tileWidthBp: 32_768 },
-  { maxSpan: 1_000_000, binSize: 8192, tileWidthBp: 524_288 },
-  { maxSpan: 10_000_000, binSize: 65_536, tileWidthBp: 4_194_304 },
-  { maxSpan: Number.POSITIVE_INFINITY, binSize: 524_288, tileWidthBp: 33_554_432 },
-];
-
-function bigWigPolicyForSpan(spanBp: number): PolicyEntry {
-  for (const entry of BIGWIG_POLICY) {
-    if (spanBp <= entry.maxSpan) return entry;
-  }
-  return BIGWIG_POLICY[BIGWIG_POLICY.length - 1]!;
-}
-
-export function bigWigBinSizeForSpan(spanBp: number): BinSize {
-  return bigWigPolicyForSpan(spanBp).binSize;
-}
-export function bigWigTileWidthForSpan(spanBp: number): number {
-  return bigWigPolicyForSpan(spanBp).tileWidthBp;
-}
-
-/**
- * Reference (FASTA): a single fixed-binSize tile per viewport. binSize = 1
- * conceptually (one bp per base) — but since BIN_SIZES doesn't include 1,
- * we keep the marker binSize at 65_536 and rely on `packed` containing
- * `baseCount` actual bases. tileWidthBp = 65 kb so ≤ 65 kb windows fetch a
- * single tile.
- */
-export const REFERENCE_BIN_SIZE: BinSize = 65_536;
-export const REFERENCE_TILE_WIDTH_BP = 65_536;
+// Re-export policy helpers so existing imports (`bamBinSizeForSpan`, etc.)
+// keep working through this module.
+export {
+  policyFor,
+  bamBinSizeForSpan,
+  bamTileWidthForSpan,
+  bigWigBinSizeForSpan,
+  bigWigTileWidthForSpan,
+  REFERENCE_BIN_SIZE,
+  REFERENCE_TILE_WIDTH_BP,
+  type TilePolicy,
+} from './tile-policy';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tile index range helper — indexes are in tileWidthBp units, not binSize.
+// Tile index range helper
 // ─────────────────────────────────────────────────────────────────────────────
 
 function visibleTileIndexRange(
@@ -189,10 +110,6 @@ function abortAllInflight(): void {
   inflight.clear();
 }
 
-/**
- * Cancel inflight tiles for `trackId` whose keys aren't in the wanted set.
- * Returns nothing — mutates the shared inflight map in place.
- */
 function pruneInflightForTrack(trackId: string, wantedKeys: Set<TileKey>): void {
   for (const [key, h] of inflight) {
     if (h.trackId !== trackId) continue;
@@ -204,37 +121,41 @@ function pruneInflightForTrack(trackId: string, wantedKeys: Set<TileKey>): void 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BAM dispatcher
+// Generic dispatch template
 // ─────────────────────────────────────────────────────────────────────────────
 
-function dispatchBamTrack(
-  track: BamTrack,
-  v: Viewport,
+interface DispatcherSpec<R extends Tile> {
+  /** Track id (used for cache key + inflight tracking). */
+  trackId: string;
+  /** The track-engine policy chosen for this viewport. */
+  policy: TilePolicy;
+  /** Genomic chrom written into the cache key (outside-facing). */
+  cacheChrom: string;
+  /** Tile index range visible in the current viewport. */
+  range: { first: number; last: number };
+  /** Worker invocation for one tile range. Closure captures the track config. */
+  workerCall: (tileStart: number, tileEnd: number, signal: AbortSignal) => Promise<R>;
+}
+
+function runTileDispatch<R extends Tile>(
+  spec: DispatcherSpec<R>,
   c: TileCacheController,
-  p: WorkerPool,
 ): void {
-  const span = Number(v.end - v.start);
-  if (!Number.isFinite(span) || span <= 0) return;
-
-  const { binSize, tileWidthBp } = bamPolicyForSpan(span);
-  const { first, last } = visibleTileIndexRange(v.start, v.end, tileWidthBp);
-
-  // Chrom mapping: the cache key uses v.chrom (the outside-facing name the
-  // render layer scans for); only the worker request carries the mapped name.
-  const chromForWorker = mapBamChrom(track, v.chrom);
+  const { trackId, policy, cacheChrom, range, workerCall } = spec;
+  const { binSize, tileWidthBp } = policy;
 
   const wantedKeys = new Set<TileKey>();
-  for (let tileIndex = first; tileIndex <= last; tileIndex++) {
+  for (let tileIndex = range.first; tileIndex <= range.last; tileIndex++) {
     wantedKeys.add(
-      formatTileKey({ trackId: track.id, chrom: v.chrom, binSize, tileWidthBp, tileIndex }),
+      formatTileKey({ trackId, chrom: cacheChrom, binSize, tileWidthBp, tileIndex }),
     );
   }
-  pruneInflightForTrack(track.id, wantedKeys);
+  pruneInflightForTrack(trackId, wantedKeys);
 
-  for (let tileIndex = first; tileIndex <= last; tileIndex++) {
+  for (let tileIndex = range.first; tileIndex <= range.last; tileIndex++) {
     const key = formatTileKey({
-      trackId: track.id,
-      chrom: v.chrom,
+      trackId,
+      chrom: cacheChrom,
       binSize,
       tileWidthBp,
       tileIndex,
@@ -243,36 +164,27 @@ function dispatchBamTrack(
     if (inflight.has(key)) continue;
 
     const controller = new AbortController();
-    inflight.set(key, { controller, trackId: track.id });
+    inflight.set(key, { controller, trackId });
     c.put(key, { state: 'pending' });
 
     const tileStart = tileIndex * tileWidthBp;
     const tileEnd = (tileIndex + 1) * tileWidthBp;
 
-    p
-      .parseBamTile(
-        {
-          url: track.url,
-          indexUrl: track.indexUrl,
-          chrom: chromForWorker,
-          start: tileStart,
-          end: tileEnd,
-          binSize,
-        },
-        controller.signal,
-      )
+    workerCall(tileStart, tileEnd, controller.signal)
       .then((rawTile) => {
         if (controller.signal.aborted) return;
+        // Worker emits placeholder trackId/key/chrom; stamp the canonical
+        // values so the render layer scans by viewport chrom.
         const tile: Tile = {
           ...rawTile,
-          trackId: track.id,
+          trackId,
           key,
-          chrom: v.chrom,
+          chrom: cacheChrom,
           binSize,
           binIndex: tileIndex,
           start: BigInt(tileStart),
           end: BigInt(tileEnd),
-        };
+        } as Tile;
         c.put(key, { state: 'ready', tile });
       })
       .catch((err: unknown) => {
@@ -287,11 +199,11 @@ function dispatchBamTrack(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BigWig dispatcher
+// Per-kind dispatcher specs
 // ─────────────────────────────────────────────────────────────────────────────
 
-function dispatchBigWigTrack(
-  track: BigWigTrack,
+function dispatchTrack(
+  track: TrackConfig,
   v: Viewport,
   c: TileCacheController,
   p: WorkerPool,
@@ -299,147 +211,85 @@ function dispatchBigWigTrack(
   const span = Number(v.end - v.start);
   if (!Number.isFinite(span) || span <= 0) return;
 
-  const { binSize, tileWidthBp } = bigWigPolicyForSpan(span);
-  const { first, last } = visibleTileIndexRange(v.start, v.end, tileWidthBp);
+  const policy = policyFor(track.kind, span);
+  if (!policy) return; // vcf / gene / bed — silently skipped this commit
 
-  const wantedKeys = new Set<TileKey>();
-  for (let tileIndex = first; tileIndex <= last; tileIndex++) {
-    wantedKeys.add(
-      formatTileKey({ trackId: track.id, chrom: v.chrom, binSize, tileWidthBp, tileIndex }),
-    );
-  }
-  pruneInflightForTrack(track.id, wantedKeys);
+  const range = visibleTileIndexRange(v.start, v.end, policy.tileWidthBp);
 
-  for (let tileIndex = first; tileIndex <= last; tileIndex++) {
-    const key = formatTileKey({
-      trackId: track.id,
-      chrom: v.chrom,
-      binSize,
-      tileWidthBp,
-      tileIndex,
-    });
-    if (c.has(key)) continue;
-    if (inflight.has(key)) continue;
-
-    const controller = new AbortController();
-    inflight.set(key, { controller, trackId: track.id });
-    c.put(key, { state: 'pending' });
-
-    const tileStart = tileIndex * tileWidthBp;
-    const tileEnd = (tileIndex + 1) * tileWidthBp;
-
-    p
-      .parseBigWigTile(
+  switch (track.kind) {
+    case 'bam': {
+      const chromForWorker = mapBamChrom(track, v.chrom);
+      runTileDispatch(
         {
-          url: track.url,
-          chrom: v.chrom,
-          start: tileStart,
-          end: tileEnd,
-          binSize,
-        },
-        controller.signal,
-      )
-      .then((rawTile) => {
-        if (controller.signal.aborted) return;
-        const tile: Tile = {
-          ...rawTile,
           trackId: track.id,
-          key,
-          chrom: v.chrom,
-          binSize,
-          binIndex: tileIndex,
-          start: BigInt(tileStart),
-          end: BigInt(tileEnd),
-        };
-        c.put(key, { state: 'ready', tile });
-      })
-      .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
-        const message = err instanceof Error ? err.message : String(err);
-        c.put(key, { state: 'error', message });
-      })
-      .finally(() => {
-        inflight.delete(key);
-      });
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Reference (FASTA) dispatcher
-// ─────────────────────────────────────────────────────────────────────────────
-
-function dispatchReferenceTrack(
-  track: ReferenceTrack,
-  v: Viewport,
-  c: TileCacheController,
-  p: WorkerPool,
-): void {
-  const span = Number(v.end - v.start);
-  if (!Number.isFinite(span) || span <= 0) return;
-
-  const binSize = REFERENCE_BIN_SIZE;
-  const tileWidthBp = REFERENCE_TILE_WIDTH_BP;
-  const { first, last } = visibleTileIndexRange(v.start, v.end, tileWidthBp);
-
-  const wantedKeys = new Set<TileKey>();
-  for (let tileIndex = first; tileIndex <= last; tileIndex++) {
-    wantedKeys.add(
-      formatTileKey({ trackId: track.id, chrom: v.chrom, binSize, tileWidthBp, tileIndex }),
-    );
-  }
-  pruneInflightForTrack(track.id, wantedKeys);
-
-  for (let tileIndex = first; tileIndex <= last; tileIndex++) {
-    const key = formatTileKey({
-      trackId: track.id,
-      chrom: v.chrom,
-      binSize,
-      tileWidthBp,
-      tileIndex,
-    });
-    if (c.has(key)) continue;
-    if (inflight.has(key)) continue;
-
-    const controller = new AbortController();
-    inflight.set(key, { controller, trackId: track.id });
-    c.put(key, { state: 'pending' });
-
-    const tileStart = tileIndex * tileWidthBp;
-    const tileEnd = (tileIndex + 1) * tileWidthBp;
-
-    p
-      .parseFastaTile(
+          policy,
+          cacheChrom: v.chrom,
+          range,
+          workerCall: (start, end, signal) =>
+            p.parseBamTile(
+              {
+                url: track.url,
+                indexUrl: (track as BamTrack).indexUrl,
+                chrom: chromForWorker,
+                start,
+                end,
+                binSize: policy.binSize,
+              },
+              signal,
+            ),
+        },
+        c,
+      );
+      return;
+    }
+    case 'bigwig': {
+      runTileDispatch(
         {
-          url: track.url,
-          faiUrl: track.faiUrl,
-          chrom: v.chrom,
-          start: tileStart,
-          end: tileEnd,
-        },
-        controller.signal,
-      )
-      .then((rawTile) => {
-        if (controller.signal.aborted) return;
-        const tile: Tile = {
-          ...rawTile,
           trackId: track.id,
-          key,
-          chrom: v.chrom,
-          binSize,
-          binIndex: tileIndex,
-          start: BigInt(tileStart),
-          end: BigInt(tileEnd),
-        };
-        c.put(key, { state: 'ready', tile });
-      })
-      .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
-        const message = err instanceof Error ? err.message : String(err);
-        c.put(key, { state: 'error', message });
-      })
-      .finally(() => {
-        inflight.delete(key);
-      });
+          policy,
+          cacheChrom: v.chrom,
+          range,
+          workerCall: (start, end, signal) =>
+            p.parseBigWigTile(
+              {
+                url: track.url,
+                chrom: v.chrom,
+                start,
+                end,
+                binSize: policy.binSize,
+              },
+              signal,
+            ),
+        },
+        c,
+      );
+      return;
+    }
+    case 'reference': {
+      const refTrack = track as ReferenceTrack;
+      runTileDispatch(
+        {
+          trackId: track.id,
+          policy,
+          cacheChrom: v.chrom,
+          range,
+          workerCall: (start, end, signal) =>
+            p.parseFastaTile(
+              {
+                url: refTrack.url,
+                faiUrl: refTrack.faiUrl,
+                chrom: v.chrom,
+                start,
+                end,
+              },
+              signal,
+            ),
+        },
+        c,
+      );
+      return;
+    }
+    // vcf / gene / bed: policyFor returned null above.
   }
 }
 
@@ -449,8 +299,8 @@ function dispatchReferenceTrack(
 
 /**
  * Boot the engine. Idempotent — calling twice without dispose returns the
- * same pool/cache pair. Solid's createEffect / onCleanup are used, so this
- * must be invoked from within a render root (App's onMount qualifies).
+ * same pool/cache pair. Must be invoked from within a Solid render root
+ * (App's onMount qualifies) so createEffect / onCleanup bind correctly.
  */
 export function startTrackEngine(): () => void {
   if (!pool) pool = createWorkerPool();
@@ -460,12 +310,9 @@ export function startTrackEngine(): () => void {
 
   createEffect(() => {
     const v = viewport();
-    // Subscribe to tracks() for re-firing on add/remove/visibility-toggle.
-    // We re-read the value inside the debounced callback so we always use
-    // the freshest list, not whatever was captured at effect-fire time.
+    // Subscribe to tracks(); read the fresh list inside the debounced cb.
     tracks();
 
-    // Tell the cache about the current viewport so eviction prefers far tiles.
     syncTileCacheViewport(v);
 
     if (debounceTimer) clearTimeout(debounceTimer);
@@ -475,14 +322,7 @@ export function startTrackEngine(): () => void {
       const listNow = tracks();
       for (const track of listNow) {
         if (!track.visible) continue;
-        if (track.kind === 'bam') {
-          dispatchBamTrack(track, vNow, localCache, localPool);
-        } else if (track.kind === 'bigwig') {
-          dispatchBigWigTrack(track, vNow, localCache, localPool);
-        } else if (track.kind === 'reference') {
-          dispatchReferenceTrack(track, vNow, localCache, localPool);
-        }
-        // gene / vcf / bed: M2 main
+        dispatchTrack(track, vNow, localCache, localPool);
       }
     }, DEBOUNCE_MS);
   });
@@ -495,8 +335,6 @@ export function startTrackEngine(): () => void {
     abortAllInflight();
     pool?.dispose();
     pool = null;
-    // The cache itself is kept across reboots — the singleton holds the data.
-    // If a full reset is needed, callers should disposeTileCache() separately.
   };
 
   onCleanup(dispose);
@@ -512,6 +350,7 @@ export function inflightCount(): number {
  * Helper for tests / dev: snapshot the tile cache via the singleton.
  * Render layer should subscribe to the L3 `tileCache` signal instead.
  */
-export function snapshotTiles(): ReadonlyMap<TileKey, TileStatus> {
+export function snapshotTiles(): ReturnType<TileCacheController['snapshot']> {
   return getTileCache().snapshot();
 }
+

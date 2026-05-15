@@ -25,14 +25,7 @@ import { createEffect, onCleanup } from 'solid-js';
 import { tracks } from '~state/tracks';
 import { tileCache } from '~state/tile-cache';
 import { viewport } from '~state/viewport';
-import {
-  bamBinSizeForSpan,
-  bamTileWidthForSpan,
-  bigWigBinSizeForSpan,
-  bigWigTileWidthForSpan,
-  REFERENCE_BIN_SIZE,
-  REFERENCE_TILE_WIDTH_BP,
-} from '~data/track-engine';
+import { policyFor, type TilePolicy } from '~data/tile-policy';
 import { createGLContext, type GLContext } from '~render/webgl';
 import {
   createPileupRenderer,
@@ -47,7 +40,6 @@ import {
   type ReferenceRenderer,
 } from '~render/tracks-render';
 import type {
-  BinSize,
   CoverageTile,
   ReadTile,
   ReferenceTile,
@@ -86,23 +78,11 @@ function tileOverlapsViewport(tile: Tile, v: Viewport): boolean {
   return tile.chrom === v.chrom && tile.end > v.start && tile.start < v.end;
 }
 
-interface ExpectedPolicy {
-  binSize: BinSize;
-  tileWidthBp: number;
-}
-
-function expectedPolicyForTrack(kind: TrackKind, span: number): ExpectedPolicy | null {
-  if (kind === 'bam') return { binSize: bamBinSizeForSpan(span), tileWidthBp: bamTileWidthForSpan(span) };
-  if (kind === 'bigwig') return { binSize: bigWigBinSizeForSpan(span), tileWidthBp: bigWigTileWidthForSpan(span) };
-  if (kind === 'reference') return { binSize: REFERENCE_BIN_SIZE, tileWidthBp: REFERENCE_TILE_WIDTH_BP };
-  return null; // vcf / gene / bed — not scheduled this commit
-}
-
 function collectTilesForTrack(
   snapshot: ReadonlyMap<TileKey, TileStatus>,
   trackId: string,
   v: Viewport,
-  policy: ExpectedPolicy,
+  policy: TilePolicy,
 ): Tile[] {
   const out: Tile[] = [];
   for (const status of snapshot.values()) {
@@ -174,7 +154,7 @@ export function createRenderScheduler(canvas: HTMLCanvasElement): RenderSchedule
     yTopPx: number,
   ): void => {
     const span = Number(v.end - v.start);
-    const policy = expectedPolicyForTrack(track.kind, span);
+    const policy = policyFor(track.kind, span);
     if (policy === null) return;
 
     const trackTiles = collectTilesForTrack(snapshot, track.id, v, policy);
