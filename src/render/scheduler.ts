@@ -27,8 +27,11 @@ import { tileCache } from '~state/tile-cache';
 import { viewport } from '~state/viewport';
 import {
   bamBinSizeForSpan,
+  bamTileWidthForSpan,
   bigWigBinSizeForSpan,
+  bigWigTileWidthForSpan,
   REFERENCE_BIN_SIZE,
+  REFERENCE_TILE_WIDTH_BP,
 } from '~data/track-engine';
 import { createGLContext, type GLContext } from '~render/webgl';
 import {
@@ -83,10 +86,15 @@ function tileOverlapsViewport(tile: Tile, v: Viewport): boolean {
   return tile.chrom === v.chrom && tile.end > v.start && tile.start < v.end;
 }
 
-function expectedBinSizeForTrack(kind: TrackKind, span: number): BinSize | null {
-  if (kind === 'bam') return bamBinSizeForSpan(span);
-  if (kind === 'bigwig') return bigWigBinSizeForSpan(span);
-  if (kind === 'reference') return REFERENCE_BIN_SIZE;
+interface ExpectedPolicy {
+  binSize: BinSize;
+  tileWidthBp: number;
+}
+
+function expectedPolicyForTrack(kind: TrackKind, span: number): ExpectedPolicy | null {
+  if (kind === 'bam') return { binSize: bamBinSizeForSpan(span), tileWidthBp: bamTileWidthForSpan(span) };
+  if (kind === 'bigwig') return { binSize: bigWigBinSizeForSpan(span), tileWidthBp: bigWigTileWidthForSpan(span) };
+  if (kind === 'reference') return { binSize: REFERENCE_BIN_SIZE, tileWidthBp: REFERENCE_TILE_WIDTH_BP };
   return null; // vcf / gene / bed — not scheduled this commit
 }
 
@@ -94,14 +102,18 @@ function collectTilesForTrack(
   snapshot: ReadonlyMap<TileKey, TileStatus>,
   trackId: string,
   v: Viewport,
-  expectedBinSize: BinSize,
+  policy: ExpectedPolicy,
 ): Tile[] {
   const out: Tile[] = [];
   for (const status of snapshot.values()) {
     if (status.state !== 'ready') continue;
     const tile = status.tile;
     if (tile.trackId !== trackId) continue;
-    if (tile.binSize !== expectedBinSize) continue;
+    if (tile.binSize !== policy.binSize) continue;
+    // Tile width is implicit in end-start; reject tiles minted under a
+    // different tile-width policy (otherwise stale tiles from a different
+    // zoom band would bleed into the current frame).
+    if (Number(tile.end - tile.start) !== policy.tileWidthBp) continue;
     if (!tileOverlapsViewport(tile, v)) continue;
     out.push(tile);
   }
@@ -162,10 +174,10 @@ export function createRenderScheduler(canvas: HTMLCanvasElement): RenderSchedule
     yTopPx: number,
   ): void => {
     const span = Number(v.end - v.start);
-    const expectedBinSize = expectedBinSizeForTrack(track.kind, span);
-    if (expectedBinSize === null) return;
+    const policy = expectedPolicyForTrack(track.kind, span);
+    if (policy === null) return;
 
-    const trackTiles = collectTilesForTrack(snapshot, track.id, v, expectedBinSize);
+    const trackTiles = collectTilesForTrack(snapshot, track.id, v, policy);
     if (trackTiles.length === 0) return;
 
     // Partition by payload — one band may carry only one payload type given

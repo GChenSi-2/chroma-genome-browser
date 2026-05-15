@@ -56,6 +56,55 @@ const MAX_READS = 100_000;
 /** Below this binSize, callers want per-read detail; above, a histogram. */
 const COVERAGE_BIN_THRESHOLD = 8192;
 
+/**
+ * Per-worker instance cache for the heavy index/header parsers.
+ *
+ * @gmod/bam, @gmod/bbi and @gmod/indexedfasta all parse a substantial
+ * index/header on first use (BAI is 8.7 MB for HG00096; BBI headers can be
+ * MBs). Constructing a fresh instance per tile call means re-parsing the
+ * same index N times — and that JS-side parse work, not the network, was
+ * the dominant cost of B1 cold load (~4-5 s for a single 32 kb BAM tile).
+ *
+ * Keyed by URL (BAM uses bamUrl, BigWig uses url, FASTA uses fasta+fai pair).
+ * Bounded growth: in practice we open 1-3 distinct files per session.
+ */
+const bamCache = new Map<string, BamFile>();
+const bigWigCache = new Map<string, BigWig>();
+const fastaCache = new Map<string, IndexedFasta>();
+
+function getBamFile(bamUrl: string, baiUrl: string): BamFile {
+  const key = `${bamUrl}#${baiUrl}`;
+  let f = bamCache.get(key);
+  if (!f) {
+    f = new BamFile({ bamUrl, baiUrl });
+    bamCache.set(key, f);
+  }
+  return f;
+}
+
+function getBigWig(url: string): BigWig {
+  let f = bigWigCache.get(url);
+  if (!f) {
+    f = new BigWig({ url });
+    bigWigCache.set(url, f);
+  }
+  return f;
+}
+
+function getIndexedFasta(fastaUrl: string, faiUrl: string): IndexedFasta {
+  const key = `${fastaUrl}#${faiUrl}`;
+  let f = fastaCache.get(key);
+  if (!f) {
+    type IFasta = ConstructorParameters<typeof IndexedFasta>[0];
+    f = new IndexedFasta({
+      fasta: new MinimalRemoteFile(fastaUrl) as unknown as NonNullable<IFasta['fasta']>,
+      fai: new MinimalRemoteFile(faiUrl) as unknown as NonNullable<IFasta['fai']>,
+    });
+    fastaCache.set(key, f);
+  }
+  return f;
+}
+
 /** Set up an abort-watcher on a per-task MessagePort. */
 function createAbortWatcher(port: MessagePort): { aborted: () => boolean } {
   let aborted = false;
@@ -248,13 +297,13 @@ async function runBamParse(
 ): Promise<ReadTile | CoverageTile> {
   if (abortWatcher.aborted()) throw abortError();
 
-  const bam = new BamFile({
-    bamUrl: req.url,
-    baiUrl: req.indexUrl,
-  });
+  // Cached per (bamUrl, baiUrl) inside this worker — reusing the parsed BAI
+  // turns repeat tile queries from ~5 s into ~50 ms.
+  const bam = getBamFile(req.url, req.indexUrl);
 
   // BamFile lazily fetches the header on first use; force it now so an abort
-  // during header parse is caught here rather than mid-region-fetch.
+  // during header parse is caught here rather than mid-region-fetch. Idempotent
+  // — `getHeader` no-ops on a cached instance after the first call.
   await bam.getHeader();
   if (abortWatcher.aborted()) throw abortError();
 
@@ -355,7 +404,8 @@ async function runBigWigParse(
 ): Promise<SignalTile> {
   if (abortWatcher.aborted()) throw abortError();
 
-  const bw = new BigWig({ url: req.url });
+  // Cached per URL — see note next to bamCache.
+  const bw = getBigWig(req.url);
   await bw.getHeader();
   if (abortWatcher.aborted()) throw abortError();
 
@@ -540,15 +590,8 @@ async function runFastaParse(
 ): Promise<ReferenceTile> {
   if (abortWatcher.aborted()) throw abortError();
 
-  // IndexedFasta's constructor expects `GenericFilehandle` from
-  // generic-filehandle2. We pass a structurally compatible class via a
-  // narrow `unknown` cast — see MinimalRemoteFile above for the contract
-  // and rationale. The cast is local to this construction site.
-  type IFasta = ConstructorParameters<typeof IndexedFasta>[0];
-  const fasta = new IndexedFasta({
-    fasta: new MinimalRemoteFile(req.url) as unknown as NonNullable<IFasta['fasta']>,
-    fai: new MinimalRemoteFile(req.faiUrl) as unknown as NonNullable<IFasta['fai']>,
-  });
+  // Cached per (fasta, fai) pair — see note next to bamCache.
+  const fasta = getIndexedFasta(req.url, req.faiUrl);
 
   const { signal, stop } = bridgeAbortWatcher(abortWatcher);
   let seq: string;

@@ -24,8 +24,14 @@ import { BIN_SIZES } from '~state/types';
 interface ParsedTileKey {
   trackId: string;
   chrom: string;
+  /** Bin resolution (bp per coverage/signal sample inside the tile). */
   binSize: BinSize;
-  binIndex: number;
+  /** Fetch granularity (bp covered by one whole tile). Decoupled from binSize so
+   *  wide views fetch FEW tiles each containing MANY bins, instead of many
+   *  one-bin tiles. ARCHITECTURE §2.2 (M2-main refinement of the original ladder). */
+  tileWidthBp: number;
+  /** Tile index in the tileWidthBp grid: floor(start / tileWidthBp). */
+  tileIndex: number;
 }
 
 interface TileEntry extends ParsedTileKey {
@@ -35,21 +41,23 @@ interface TileEntry extends ParsedTileKey {
 
 const BIN_SIZE_SET: ReadonlySet<number> = new Set(BIN_SIZES);
 
-/** `${trackId}:${chrom}:${binSize}:${binIndex}` — see ARCHITECTURE §2.2. */
+/** `${trackId}:${chrom}:${binSize}:${tileWidthBp}:${tileIndex}` — see ARCHITECTURE §2.2. */
 export function parseTileKey(key: TileKey): ParsedTileKey | null {
   const parts = key.split(':');
-  if (parts.length !== 4) return null;
-  const [trackId, chrom, binSizeRaw, binIndexRaw] = parts;
-  if (!trackId || !chrom || !binSizeRaw || !binIndexRaw) return null;
+  if (parts.length !== 5) return null;
+  const [trackId, chrom, binSizeRaw, tileWidthRaw, tileIndexRaw] = parts;
+  if (!trackId || !chrom || !binSizeRaw || !tileWidthRaw || !tileIndexRaw) return null;
   const binSize = Number(binSizeRaw);
-  const binIndex = Number(binIndexRaw);
+  const tileWidthBp = Number(tileWidthRaw);
+  const tileIndex = Number(tileIndexRaw);
   if (!BIN_SIZE_SET.has(binSize)) return null;
-  if (!Number.isFinite(binIndex) || !Number.isInteger(binIndex) || binIndex < 0) return null;
-  return { trackId, chrom, binSize: binSize as BinSize, binIndex };
+  if (!Number.isFinite(tileWidthBp) || !Number.isInteger(tileWidthBp) || tileWidthBp < binSize) return null;
+  if (!Number.isFinite(tileIndex) || !Number.isInteger(tileIndex) || tileIndex < 0) return null;
+  return { trackId, chrom, binSize: binSize as BinSize, tileWidthBp, tileIndex };
 }
 
 export function formatTileKey(p: ParsedTileKey): TileKey {
-  return `${p.trackId}:${p.chrom}:${p.binSize}:${p.binIndex}`;
+  return `${p.trackId}:${p.chrom}:${p.binSize}:${p.tileWidthBp}:${p.tileIndex}`;
 }
 
 export type TileCacheSnapshot = ReadonlyMap<TileKey, TileStatus>;
@@ -89,9 +97,9 @@ const DEFAULT_CAPACITY = 256;
  */
 function distanceBp(entry: TileEntry, viewport: Viewport): number {
   if (entry.chrom !== viewport.chrom) return Number.POSITIVE_INFINITY;
-  const binSize = BigInt(entry.binSize);
-  const entryStart = BigInt(entry.binIndex) * binSize;
-  const entryMid = entryStart + binSize / 2n;
+  const widthBig = BigInt(entry.tileWidthBp);
+  const entryStart = BigInt(entry.tileIndex) * widthBig;
+  const entryMid = entryStart + widthBig / 2n;
   const viewportMid = (viewport.start + viewport.end) / 2n;
   const delta = entryMid > viewportMid ? entryMid - viewportMid : viewportMid - entryMid;
   // bp distances are bounded by ~3e9; Number is safe.

@@ -57,87 +57,103 @@ import {
 import { createWorkerPool, type WorkerPool } from './workers/pool';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Span → binSize policies (one per data kind)
+// Span → (binSize, tileWidthBp) policies (one per data kind)
+//
+// `binSize` = resolution: bp per coverage/signal sample inside the tile.
+// `tileWidthBp` = fetch granularity: bp covered by one whole tile.
+//
+// Decoupling them is the key fix for B1 cold load: a 1 Mb viewport at
+// binSize 8192 used to spawn 122 one-bin tiles (one BAI query each, 30 s+);
+// at tileWidthBp 512 kb the same view fetches 2 tiles each holding 64 bins.
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface PolicyEntry {
   maxSpan: number;
   binSize: BinSize;
+  /** Fetch granularity — must be >= binSize and a multiple of it. */
+  tileWidthBp: number;
 }
 
 /**
  * BAM:
  *
- *  span (bp)        binSize    tile type    rationale
- *  ─────────────────────────────────────────────────────────────
- *  ≤ 50,000          1,024     ReadTile     pileup view, ~50 tiles max
- *  ≤ 1,000,000       8,192     CoverageTile coverage histogram
- *  ≤ 10,000,000     65,536     CoverageTile zoomed-out coverage
- *   > 10,000,000   524,288     CoverageTile chrom-overview
+ *  span (bp)        binSize    tileWidthBp    tiles/viewport
+ *  ──────────────────────────────────────────────────────────
+ *  ≤ 50,000          1,024     32,768           ≤ 3
+ *  ≤ 1,000,000       8,192    524,288           ≤ 3
+ *  ≤ 10,000,000     65,536  4,194,304           ≤ 3
+ *   > 10,000,000   524,288 33,554,432           1-2
  */
 const BAM_POLICY: ReadonlyArray<PolicyEntry> = [
-  { maxSpan: 50_000, binSize: 1024 },
-  { maxSpan: 1_000_000, binSize: 8192 },
-  { maxSpan: 10_000_000, binSize: 65_536 },
-  { maxSpan: Number.POSITIVE_INFINITY, binSize: 524_288 },
+  { maxSpan: 50_000, binSize: 1024, tileWidthBp: 32_768 },
+  { maxSpan: 1_000_000, binSize: 8192, tileWidthBp: 524_288 },
+  { maxSpan: 10_000_000, binSize: 65_536, tileWidthBp: 4_194_304 },
+  { maxSpan: Number.POSITIVE_INFINITY, binSize: 524_288, tileWidthBp: 33_554_432 },
 ];
+
+function bamPolicyForSpan(spanBp: number): PolicyEntry {
+  for (const entry of BAM_POLICY) {
+    if (spanBp <= entry.maxSpan) return entry;
+  }
+  return BAM_POLICY[BAM_POLICY.length - 1]!;
+}
 
 export function bamBinSizeForSpan(spanBp: number): BinSize {
-  for (const entry of BAM_POLICY) {
-    if (spanBp <= entry.maxSpan) return entry.binSize;
-  }
-  return 4_194_304;
+  return bamPolicyForSpan(spanBp).binSize;
+}
+export function bamTileWidthForSpan(spanBp: number): number {
+  return bamPolicyForSpan(spanBp).tileWidthBp;
 }
 
 /**
- * BigWig — same ladder as BAM. Each parser tile occupies one binSize-wide
- * range and holds `ceil(tileWidth / binSize) = 1` bin, so tile count
- * dominates the cost; we cap it to a few dozen tiles per viewport.
- *
- *  span (bp)        binSize    tiles (max)    rationale
- *  ─────────────────────────────────────────────────────────────
- *  ≤    50,000      1,024      ~50            pileup-resolution signal
- *  ≤ 1,000,000      8,192      ~122           coverage-resolution signal
- *  ≤ 10,000,000     65,536     ~152           zoomed-out chrom-region
- *   > 10,000,000    524,288    sparse         chrom-overview
- *
- * If we later want crisper BigWig at fine zoom, the right move is to make
- * one tile hold many bins (tileWidth != binSize). That's a worker-contract
- * change tracked for M2-main.
+ * BigWig — same ladder as BAM. bbi is dense so we COULD afford finer
+ * binSize at fine zoom, but the bottleneck is per-tile network overhead;
+ * matching BAM keeps total tile count low and lets the cache share
+ * cardinality across kinds.
  */
 const BIGWIG_POLICY: ReadonlyArray<PolicyEntry> = [
-  { maxSpan: 50_000, binSize: 1024 },
-  { maxSpan: 1_000_000, binSize: 8192 },
-  { maxSpan: 10_000_000, binSize: 65_536 },
-  { maxSpan: Number.POSITIVE_INFINITY, binSize: 524_288 },
+  { maxSpan: 50_000, binSize: 1024, tileWidthBp: 32_768 },
+  { maxSpan: 1_000_000, binSize: 8192, tileWidthBp: 524_288 },
+  { maxSpan: 10_000_000, binSize: 65_536, tileWidthBp: 4_194_304 },
+  { maxSpan: Number.POSITIVE_INFINITY, binSize: 524_288, tileWidthBp: 33_554_432 },
 ];
 
-export function bigWigBinSizeForSpan(spanBp: number): BinSize {
+function bigWigPolicyForSpan(spanBp: number): PolicyEntry {
   for (const entry of BIGWIG_POLICY) {
-    if (spanBp <= entry.maxSpan) return entry.binSize;
+    if (spanBp <= entry.maxSpan) return entry;
   }
-  return 4_194_304;
+  return BIGWIG_POLICY[BIGWIG_POLICY.length - 1]!;
+}
+
+export function bigWigBinSizeForSpan(spanBp: number): BinSize {
+  return bigWigPolicyForSpan(spanBp).binSize;
+}
+export function bigWigTileWidthForSpan(spanBp: number): number {
+  return bigWigPolicyForSpan(spanBp).tileWidthBp;
 }
 
 /**
- * Reference (FASTA): a single fixed-binSize tile per viewport. 65_536-bp tiles
- * mean small windows (≤ 65kb) fetch one tile, larger windows split. Reference
- * fetches are cheap (sequential bytes through .fai), so no ladder is needed.
+ * Reference (FASTA): a single fixed-binSize tile per viewport. binSize = 1
+ * conceptually (one bp per base) — but since BIN_SIZES doesn't include 1,
+ * we keep the marker binSize at 65_536 and rely on `packed` containing
+ * `baseCount` actual bases. tileWidthBp = 65 kb so ≤ 65 kb windows fetch a
+ * single tile.
  */
 export const REFERENCE_BIN_SIZE: BinSize = 65_536;
+export const REFERENCE_TILE_WIDTH_BP = 65_536;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tile index range helper
+// Tile index range helper — indexes are in tileWidthBp units, not binSize.
 // ─────────────────────────────────────────────────────────────────────────────
 
 function visibleTileIndexRange(
   start: bigint,
   end: bigint,
-  binSize: BinSize,
+  tileWidthBp: number,
 ): { first: number; last: number } {
-  const binBig = BigInt(binSize);
-  const first = Number(start / binBig);
-  const lastInclusive = end > 0n ? Number((end - 1n) / binBig) : first;
+  const widthBig = BigInt(tileWidthBp);
+  const first = Number(start / widthBig);
+  const lastInclusive = end > 0n ? Number((end - 1n) / widthBig) : first;
   return { first, last: lastInclusive };
 }
 
@@ -200,21 +216,29 @@ function dispatchBamTrack(
   const span = Number(v.end - v.start);
   if (!Number.isFinite(span) || span <= 0) return;
 
-  const binSize = bamBinSizeForSpan(span);
-  const { first, last } = visibleTileIndexRange(v.start, v.end, binSize);
+  const { binSize, tileWidthBp } = bamPolicyForSpan(span);
+  const { first, last } = visibleTileIndexRange(v.start, v.end, tileWidthBp);
 
   // Chrom mapping: the cache key uses v.chrom (the outside-facing name the
   // render layer scans for); only the worker request carries the mapped name.
   const chromForWorker = mapBamChrom(track, v.chrom);
 
   const wantedKeys = new Set<TileKey>();
-  for (let binIndex = first; binIndex <= last; binIndex++) {
-    wantedKeys.add(formatTileKey({ trackId: track.id, chrom: v.chrom, binSize, binIndex }));
+  for (let tileIndex = first; tileIndex <= last; tileIndex++) {
+    wantedKeys.add(
+      formatTileKey({ trackId: track.id, chrom: v.chrom, binSize, tileWidthBp, tileIndex }),
+    );
   }
   pruneInflightForTrack(track.id, wantedKeys);
 
-  for (let binIndex = first; binIndex <= last; binIndex++) {
-    const key = formatTileKey({ trackId: track.id, chrom: v.chrom, binSize, binIndex });
+  for (let tileIndex = first; tileIndex <= last; tileIndex++) {
+    const key = formatTileKey({
+      trackId: track.id,
+      chrom: v.chrom,
+      binSize,
+      tileWidthBp,
+      tileIndex,
+    });
     if (c.has(key)) continue;
     if (inflight.has(key)) continue;
 
@@ -222,8 +246,8 @@ function dispatchBamTrack(
     inflight.set(key, { controller, trackId: track.id });
     c.put(key, { state: 'pending' });
 
-    const tileStart = binIndex * binSize;
-    const tileEnd = (binIndex + 1) * binSize;
+    const tileStart = tileIndex * tileWidthBp;
+    const tileEnd = (tileIndex + 1) * tileWidthBp;
 
     p
       .parseBamTile(
@@ -245,7 +269,7 @@ function dispatchBamTrack(
           key,
           chrom: v.chrom,
           binSize,
-          binIndex,
+          binIndex: tileIndex,
           start: BigInt(tileStart),
           end: BigInt(tileEnd),
         };
@@ -275,17 +299,25 @@ function dispatchBigWigTrack(
   const span = Number(v.end - v.start);
   if (!Number.isFinite(span) || span <= 0) return;
 
-  const binSize = bigWigBinSizeForSpan(span);
-  const { first, last } = visibleTileIndexRange(v.start, v.end, binSize);
+  const { binSize, tileWidthBp } = bigWigPolicyForSpan(span);
+  const { first, last } = visibleTileIndexRange(v.start, v.end, tileWidthBp);
 
   const wantedKeys = new Set<TileKey>();
-  for (let binIndex = first; binIndex <= last; binIndex++) {
-    wantedKeys.add(formatTileKey({ trackId: track.id, chrom: v.chrom, binSize, binIndex }));
+  for (let tileIndex = first; tileIndex <= last; tileIndex++) {
+    wantedKeys.add(
+      formatTileKey({ trackId: track.id, chrom: v.chrom, binSize, tileWidthBp, tileIndex }),
+    );
   }
   pruneInflightForTrack(track.id, wantedKeys);
 
-  for (let binIndex = first; binIndex <= last; binIndex++) {
-    const key = formatTileKey({ trackId: track.id, chrom: v.chrom, binSize, binIndex });
+  for (let tileIndex = first; tileIndex <= last; tileIndex++) {
+    const key = formatTileKey({
+      trackId: track.id,
+      chrom: v.chrom,
+      binSize,
+      tileWidthBp,
+      tileIndex,
+    });
     if (c.has(key)) continue;
     if (inflight.has(key)) continue;
 
@@ -293,8 +325,8 @@ function dispatchBigWigTrack(
     inflight.set(key, { controller, trackId: track.id });
     c.put(key, { state: 'pending' });
 
-    const tileStart = binIndex * binSize;
-    const tileEnd = (binIndex + 1) * binSize;
+    const tileStart = tileIndex * tileWidthBp;
+    const tileEnd = (tileIndex + 1) * tileWidthBp;
 
     p
       .parseBigWigTile(
@@ -315,7 +347,7 @@ function dispatchBigWigTrack(
           key,
           chrom: v.chrom,
           binSize,
-          binIndex,
+          binIndex: tileIndex,
           start: BigInt(tileStart),
           end: BigInt(tileEnd),
         };
@@ -346,16 +378,25 @@ function dispatchReferenceTrack(
   if (!Number.isFinite(span) || span <= 0) return;
 
   const binSize = REFERENCE_BIN_SIZE;
-  const { first, last } = visibleTileIndexRange(v.start, v.end, binSize);
+  const tileWidthBp = REFERENCE_TILE_WIDTH_BP;
+  const { first, last } = visibleTileIndexRange(v.start, v.end, tileWidthBp);
 
   const wantedKeys = new Set<TileKey>();
-  for (let binIndex = first; binIndex <= last; binIndex++) {
-    wantedKeys.add(formatTileKey({ trackId: track.id, chrom: v.chrom, binSize, binIndex }));
+  for (let tileIndex = first; tileIndex <= last; tileIndex++) {
+    wantedKeys.add(
+      formatTileKey({ trackId: track.id, chrom: v.chrom, binSize, tileWidthBp, tileIndex }),
+    );
   }
   pruneInflightForTrack(track.id, wantedKeys);
 
-  for (let binIndex = first; binIndex <= last; binIndex++) {
-    const key = formatTileKey({ trackId: track.id, chrom: v.chrom, binSize, binIndex });
+  for (let tileIndex = first; tileIndex <= last; tileIndex++) {
+    const key = formatTileKey({
+      trackId: track.id,
+      chrom: v.chrom,
+      binSize,
+      tileWidthBp,
+      tileIndex,
+    });
     if (c.has(key)) continue;
     if (inflight.has(key)) continue;
 
@@ -363,8 +404,8 @@ function dispatchReferenceTrack(
     inflight.set(key, { controller, trackId: track.id });
     c.put(key, { state: 'pending' });
 
-    const tileStart = binIndex * binSize;
-    const tileEnd = (binIndex + 1) * binSize;
+    const tileStart = tileIndex * tileWidthBp;
+    const tileEnd = (tileIndex + 1) * tileWidthBp;
 
     p
       .parseFastaTile(
@@ -385,7 +426,7 @@ function dispatchReferenceTrack(
           key,
           chrom: v.chrom,
           binSize,
-          binIndex,
+          binIndex: tileIndex,
           start: BigInt(tileStart),
           end: BigInt(tileEnd),
         };
