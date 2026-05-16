@@ -109,10 +109,17 @@ function collectTilesForTrack(
     const tile = status.tile;
     if (tile.trackId !== trackId) continue;
     if (tile.binSize !== policy.binSize) continue;
-    // Tile width is implicit in end-start; reject tiles minted under a
-    // different tile-width policy (otherwise stale tiles from a different
-    // zoom band would bleed into the current frame).
-    if (Number(tile.end - tile.start) !== policy.tileWidthBp) continue;
+    if (policy.vp) {
+      // vp tiles MUST match the current viewport exactly — same span,
+      // same start. Different-start vp tiles from previous viewports
+      // would otherwise paint partial / mis-positioned data here.
+      if (tile.start !== v.start || tile.end !== v.end) continue;
+    } else {
+      // Tile width is implicit in end-start; reject tiles minted under a
+      // different tile-width policy (otherwise stale tiles from a different
+      // zoom band would bleed into the current frame).
+      if (Number(tile.end - tile.start) !== policy.tileWidthBp) continue;
+    }
     if (!tileOverlapsViewport(tile, v)) continue;
     out.push(tile);
   }

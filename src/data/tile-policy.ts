@@ -18,6 +18,17 @@ export interface TilePolicy {
   binSize: BinSize;
   /** bp covered by one whole tile (fetch granularity). Always >= binSize. */
   tileWidthBp: number;
+  /**
+   * Single-fetch viewport mode. When set, the dispatcher emits exactly one
+   * tile spanning [v.start, v.end] instead of N tiles bucketed onto a
+   * fixed grid, and `tileWidthBp` equals the viewport span (variable per
+   * call). The scheduler skips the tile-binning width check for vp tiles
+   * and instead matches by exact tile.start === v.start.
+   *
+   * Used today for BAM pileup tier (span <= 50_000) where reads-per-byte
+   * is high and saving 1-2 HTTP round-trips materially speeds up B1.
+   */
+  vp?: true;
 }
 
 interface LadderEntry extends TilePolicy {
@@ -30,24 +41,44 @@ interface LadderEntry extends TilePolicy {
  *
  *  span (bp)        binSize    tileWidthBp    tiles/viewport
  *  ──────────────────────────────────────────────────────────
- *  ≤ 50,000          1,024     32,768           ≤ 3
+ *  ≤ 50,000          1,024    span (vp mode)   1
  *  ≤ 1,000,000       8,192    524,288           ≤ 3
  *  ≤ 10,000,000     65,536  4,194,304           ≤ 3
  *   > 10,000,000   524,288 33,554,432           1-2
+ *
+ * Pileup tier uses vp (single-fetch-per-viewport) — see TilePolicy.vp.
  */
+const BAM_PILEUP_VP_THRESHOLD = 50_000;
 const BAM_LADDER: ReadonlyArray<LadderEntry> = [
-  { maxSpan: 50_000, binSize: 1024, tileWidthBp: 32_768 },
   { maxSpan: 1_000_000, binSize: 8192, tileWidthBp: 524_288 },
   { maxSpan: 10_000_000, binSize: 65_536, tileWidthBp: 4_194_304 },
   { maxSpan: Number.POSITIVE_INFINITY, binSize: 524_288, tileWidthBp: 33_554_432 },
 ];
 
 /**
- * BigWig — same ladder as BAM for now. bbi is dense so finer binSize at fine
- * zoom would be visually crisper, but per-tile network overhead dominates;
- * matching BAM keeps total tile cardinality low.
+ * BAM at pileup tier: emit exactly one tile spanning the full viewport.
+ * binSize stays at 1024 (below COVERAGE_BIN_THRESHOLD in parser.worker so
+ * the worker takes the per-read pack path); tileWidthBp tracks the viewport
+ * span verbatim so the scheduler's per-tile width check is satisfied.
  */
-const BIGWIG_LADDER: ReadonlyArray<LadderEntry> = BAM_LADDER;
+function bamPolicy(span: number): TilePolicy {
+  if (span <= BAM_PILEUP_VP_THRESHOLD) {
+    return { binSize: 1024, tileWidthBp: Math.max(1, Math.floor(span)), vp: true };
+  }
+  return fromLadder(BAM_LADDER, span);
+}
+
+/**
+ * BigWig — own ladder. BAM lost its pileup-tier rung when BAM moved to vp
+ * mode; BigWig still wants the fine-grained 1024-bin tier at zoom-in so
+ * the signal histogram isn't artificially coarsened.
+ */
+const BIGWIG_LADDER: ReadonlyArray<LadderEntry> = [
+  { maxSpan: 50_000, binSize: 1024, tileWidthBp: 32_768 },
+  { maxSpan: 1_000_000, binSize: 8192, tileWidthBp: 524_288 },
+  { maxSpan: 10_000_000, binSize: 65_536, tileWidthBp: 4_194_304 },
+  { maxSpan: Number.POSITIVE_INFINITY, binSize: 524_288, tileWidthBp: 33_554_432 },
+];
 
 /**
  * Reference (FASTA): fixed binSize (one bp per base conceptually; 65_536 is
@@ -76,7 +107,7 @@ const GENE_LADDER: ReadonlyArray<LadderEntry> = [
 type PolicyFn = (spanBp: number) => TilePolicy;
 
 const POLICIES: Partial<Record<TrackKind, PolicyFn>> = {
-  bam: (span) => fromLadder(BAM_LADDER, span),
+  bam: bamPolicy,
   bigwig: (span) => fromLadder(BIGWIG_LADDER, span),
   reference: () => REFERENCE_POLICY,
   gene: (span) => fromLadder(GENE_LADDER, span),

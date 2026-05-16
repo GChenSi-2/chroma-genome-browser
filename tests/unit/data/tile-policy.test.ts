@@ -12,8 +12,8 @@ import type { TrackKind } from '~state/types';
 
 describe('policyFor', () => {
   it.each([
-    ['bam', 10_000, 1024, 32_768],
-    ['bam', 50_000, 1024, 32_768],
+    // BAM pileup tier (≤ 50_000): single-fetch vp mode, tileWidthBp = span.
+    // Validated below; the ladder rows here cover coverage / overview tiers.
     ['bam', 50_001, 8192, 524_288],
     ['bam', 1_000_000, 8192, 524_288],
     ['bam', 5_000_000, 65_536, 4_194_304],
@@ -37,8 +37,23 @@ describe('policyFor', () => {
       expect(p).not.toBeNull();
       expect(p!.binSize).toBe(binSize);
       expect(p!.tileWidthBp).toBe(tileWidthBp);
+      expect(p!.vp).toBeUndefined();
     },
   );
+
+  it.each([
+    [10_000],
+    [25_000],
+    [50_000],
+    [200],
+    [1],
+  ])('bam vp mode: span=%i → binSize 1024, tileWidthBp = span', (span) => {
+    const p = policyFor('bam', span);
+    expect(p).not.toBeNull();
+    expect(p!.vp).toBe(true);
+    expect(p!.binSize).toBe(1024);
+    expect(p!.tileWidthBp).toBe(span);
+  });
 
   it.each(['vcf', 'bed'] as const)(
     'returns null for unsupported kind %s',
@@ -47,10 +62,11 @@ describe('policyFor', () => {
     },
   );
 
-  it('every policy has tileWidthBp >= binSize and an integer ratio', () => {
+  it('every non-vp policy has tileWidthBp >= binSize and an integer ratio', () => {
     for (const kind of ['bam', 'bigwig', 'reference', 'gene'] as const) {
-      for (const span of [1_000, 100_000, 1_000_000, 100_000_000]) {
+      for (const span of [100_000, 1_000_000, 100_000_000]) {
         const p = policyFor(kind, span)!;
+        if (p.vp) continue;
         expect(p.tileWidthBp).toBeGreaterThanOrEqual(p.binSize);
         expect(p.tileWidthBp % p.binSize).toBe(0);
       }
@@ -59,8 +75,9 @@ describe('policyFor', () => {
 });
 
 describe('back-compat shims', () => {
-  it('bamBinSizeForSpan / bamTileWidthForSpan agree with policyFor', () => {
+  it('bamBinSizeForSpan / bamTileWidthForSpan agree with policyFor (non-vp tier)', () => {
     const p = policyFor('bam', 500_000)!;
+    expect(p.vp).toBeUndefined();
     expect(bamBinSizeForSpan(500_000)).toBe(p.binSize);
     expect(bamTileWidthForSpan(500_000)).toBe(p.tileWidthBp);
   });

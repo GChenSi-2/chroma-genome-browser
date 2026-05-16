@@ -208,6 +208,81 @@ function runTileDispatch<R extends Tile>(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// BAM single-fetch (viewport mode) — pileup tier only.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * One request covers the entire viewport, bypassing the tile-binning loop.
+ * Cache key encodes v.start as tileIndex so different viewport positions
+ * stay distinct. Eviction distance scoring becomes meaningless for vp keys
+ * (the tileIndex * tileWidthBp product is far outside genomic space) but
+ * the cache never hits capacity at our N tracks — acceptable for now.
+ */
+function dispatchBamSingleFetch(
+  track: BamTrack,
+  v: Viewport,
+  chromForWorker: string,
+  policy: TilePolicy,
+  c: TileCacheController,
+  p: WorkerPool,
+): void {
+  const start = Number(v.start);
+  const end = Number(v.end);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+  const span = end - start;
+
+  const key = formatTileKey({
+    trackId: track.id,
+    chrom: v.chrom,
+    binSize: policy.binSize,
+    tileWidthBp: span,
+    tileIndex: start,
+  });
+
+  pruneInflightForTrack(track.id, new Set([key]));
+  if (c.has(key)) return;
+  if (inflight.has(key)) return;
+
+  const controller = new AbortController();
+  inflight.set(key, { controller, trackId: track.id });
+  c.put(key, { state: 'pending' });
+
+  p.parseBamTile(
+    {
+      url: track.url,
+      indexUrl: track.indexUrl,
+      chrom: chromForWorker,
+      start,
+      end,
+      binSize: policy.binSize,
+    },
+    controller.signal,
+  )
+    .then((rawTile) => {
+      if (controller.signal.aborted) return;
+      const tile: Tile = {
+        ...rawTile,
+        trackId: track.id,
+        key,
+        chrom: v.chrom,
+        binSize: policy.binSize,
+        binIndex: 0,
+        start: BigInt(start),
+        end: BigInt(end),
+      } as Tile;
+      c.put(key, { state: 'ready', tile });
+    })
+    .catch((err: unknown) => {
+      if (controller.signal.aborted) return;
+      const message = err instanceof Error ? err.message : String(err);
+      c.put(key, { state: 'error', message });
+    })
+    .finally(() => {
+      inflight.delete(key);
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Per-kind dispatcher specs
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -228,6 +303,10 @@ function dispatchTrack(
   switch (track.kind) {
     case 'bam': {
       const chromForWorker = mapBamChrom(track, v.chrom);
+      if (policy.vp) {
+        dispatchBamSingleFetch(track, v, chromForWorker, policy, c, p);
+        return;
+      }
       runTileDispatch(
         {
           trackId: track.id,
