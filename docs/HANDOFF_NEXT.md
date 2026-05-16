@@ -1,7 +1,7 @@
 # HANDOFF_NEXT — picking the project back up
 
-> Updated at the end of the M2-prep + range-bar + annotation arc.
-> Replaces the earlier handoff written at commit `1abfd02`. Snapshot of
+> Updated at the end of the sticky-routing + reference-FASTA arc.
+> Replaces the earlier handoff written at commit `813655b`. Snapshot of
 > what's in `main`, what's wired, what's parked, and the exact prompt to
 > drop into the next session.
 
@@ -10,10 +10,10 @@
 ## Project at a glance
 
 ```
-39 commits on main, single trunk.
+42 commits on main, single trunk.
 208 / 208 unit tests pass (vitest, includes 9 adapt + 17 policy + 8 chrom).
 TypeScript 6 strict + noUncheckedIndexedAccess clean.
-Production build: 87.6 kB main JS + 21.5 kB CSS gzipped 31.3 + 5.2 kB
+Production build: 87.8 kB main JS + 22.1 kB CSS gzipped 31.4 + 5.3 kB
                   + 188.8 kB parser.worker chunk (separate, ~40 kB gz).
 Live demo: https://chroma-delta.vercel.app  (Vercel scope: game-tool-team)
 ```
@@ -34,18 +34,19 @@ vercel --prod --scope game-tool-team --yes
 
 ## What's live in the demo today
 
-**4 tracks** loaded by default at `chr20:10,000,000-10,010,000`:
+**5 tracks** loaded by default at `chr20:10,000,000-10,010,000`, top → bottom:
 
 | Track | Kind | Source | Notes |
 |---|---|---|---|
+| hg19 reference (IGV / Broad) | reference | s3.amazonaws.com/igv.broadinstitute.org | plain `.fa + .fai` over Range, CORS open, per-base 1-bp quads at zoom-in |
 | Ensembl · genes (GRCh38) | gene | rest.ensembl.org REST API | gene + transcript + exon, 1-Mb tiles |
 | phyloP100way · conservation | bigwig | UCSC hg19 phyloP | conservation signal |
-| HG002 · GIAB GRCh38 300× | bam | NCBI ftp-trace | high-coverage hg38 BAM |
+| HG002 · GIAB GRCh38 300× | bam | NCBI ftp-trace | high-coverage hg38 BAM (see #6) |
 | HG00096 · 1000G low-coverage | bam | 1000genomes.s3.amazonaws.com | hg19 5× pilot |
 
-Three different builds in one demo (hg19 BigWig, GRCh38 BAM + genes,
-hg19 BAM). The chrom-length table is hg38 (close enough that the hg19
-tracks don't visibly overshoot).
+Three different builds in one demo (hg19 reference + BigWig + BAM,
+GRCh38 BAM + genes). The chrom-length table is hg38 (close enough that
+the hg19 tracks don't visibly overshoot).
 
 ## What works (per-layer status)
 
@@ -81,17 +82,30 @@ tracks don't visibly overshoot).
 | L4 ui | `ThemeToggle.tsx` | Per-icon lucide imports (barrel kills dev server). |
 | L4 ui | `shortcuts/global-shortcuts.ts` | `h/l/+/-/0/g/t/?` + `v/d/Delete`. |
 
-## Performance (last measured at M2-prep)
+## Performance (re-measured after sticky-routing fix, 5-track demo)
 
-Chrome stable, 1280×800 viewport, 1060×752 canvas, hg19 1000G BAM:
+Chrome stable, 1280×800 viewport, 1060×752 canvas. Numbers are noisier
+than the old 2-track M2-prep baseline because B1 now waits on all
+visible tracks, and the 300× HG002 BAM is the long pole (carry-forward
+#6 — was #7 pre-shipment of sticky routing).
 
 | Scenario | Result | Target | Gate |
 | --- | --- | --- | --- |
-| B1 cold 1 Mb (first nav) | 1.14 s | 300 ms | ⚠️ |
-| B1 warm cache hit | 0 ms | 300 ms | ✅ |
-| B2 pan avg / p95 fps | 59.9 / 59.5 | 60 / 50 | ✅ |
-| B3 zoom avg fps | 59.9 | 60 | ✅ |
-| B5 heap (4 tracks) | < 50 MB | 300 MB | ✅ |
+| B1 cold 1 Mb, 1 BAM track, fresh region | 8.6 s (cold worker) | 300 ms | ❌ |
+| B1 same URL, different 1 Mb region | 2.9 s (BAI cached) | 300 ms | ❌ |
+| B1 cold 1 Mb, 5-track default demo | 7–30 s (300× BAM dominates) | 300 ms | ❌ |
+| B2 pan avg / p95 fps | 59.9 / 59.5 (pre-arc) | 60 / 50 | ✅ |
+| B3 zoom avg fps | 59.9 (pre-arc) | 60 | ✅ |
+| B5 heap (5 tracks) | < 50 MB | 300 MB | ✅ |
+
+The 1.14 s M2-prep figure was a stale 2-track measurement; with the
+GRCh38 300× BAM + gene API + reference added since, the steady-state
+B1 envelope is fundamentally different. Sticky URL-hash routing
+(commit `44dd3df`) cut **second-nav-on-same-URL** from a re-parse
+cost (~8 s) to a header-cache hit (~3 s), but the cold first nav is
+still dominated by network + per-track index parse. Closing the
+300 ms gate requires #1 below (single-fetch-per-viewport BAM) and
+either dropping or rate-limiting the 300× BAM at 1 Mb span.
 
 Bench scaffold in `tests/bench/perf.ts`, loaded via
 `await import('/tests/bench/perf.ts')` inside the preview. `runAll()`
@@ -108,73 +122,85 @@ returns `{ b1, b2, b3, report }`.
 | `3d90677` | Orphan instance buffer every draw (cross-tile race fix) |
 | `0a31cdc` | Per-tier BAM band height (60 px coverage vs 200 px pileup) + contextRange auto-adapt |
 | `56474a1` | GRCh38 BAM demo + Ensembl gene track + GeneRenderer |
+| `44dd3df` | Stable per-URL worker dispatch — FNV-1a hash, no more cold-cache scatter |
+| `79e694e` | hg19 reference FASTA seeded at top of demo stack (IGV / Broad mirror) |
 
 ## Known gaps + carry-forward (updated)
 
-Ordered roughly by ROI:
+Closed in this arc (no longer carry-forward):
 
-1. **URL-hash sticky worker routing** (~30 min). Pool round-robin pushes
-   parseBam calls to whichever worker; with per-worker parser cache the
-   "wrong" worker is cold and adds ~1-2 s. Fix: hash `req.url` mod
-   `workers.length`. Touch `src/data/workers/pool.ts` only.
+- ✅ **URL-hash sticky worker routing** — shipped in `44dd3df`. FNV-1a
+  hash on `req.url` keeps each file's parser instance pinned to one
+  worker. Same-URL re-nav cost dropped ~8 s → ~3 s (one-track A→B
+  region measurement).
+- ✅ **Reference FASTA demo data** — shipped in `79e694e`. The "needs
+  bgzip" note was wrong: `IndexedFasta` (not the `Bgzip` variant our
+  worker uses) only wants `.fa + .fai` over HTTP Range. Broad's S3
+  bucket hosts that with CORS open.
+
+Remaining, ordered roughly by ROI:
+
+1. **Single-fetch-per-viewport BAM mode** (~3-4 h). For B1 to hit
+   300 ms, we'd need IGV's "one request per viewport" mode in parallel
+   to the tile cache. Big refactor; keep tile-cache for cache reuse but
+   add a fast-paint single-fetch path.
 
 2. **Cross-tile pileup row merge** (~1 h). `bam-pileup.ts` assigns
    pileup rows per-tile; reads at tile boundaries draw twice. Add
    `drawMerged(tiles, viewport, yTopPx)` that dedups by (start, length,
    flags) tuple before row assignment.
 
-3. **Single-fetch-per-viewport BAM mode** (~3-4 h). For B1 to hit
-   300 ms, we'd need IGV's "one request per viewport" mode in parallel
-   to the tile cache. Big refactor; keep tile-cache for cache reuse but
-   add a fast-paint single-fetch path.
-
-4. **Gene-name labels** (~2-3 h). Currently `gene.ts` draws geometry
+3. **Gene-name labels** (~2-3 h). Currently `gene.ts` draws geometry
    only; users see colored shapes with no names. Two paths:
    - SDF font atlas (production: msdf-bmfont-xml pre-baked, sampled in
      fragment shader). Same as Reference Path B in `reference.ts`.
    - Canvas2D overlay div positioned absolutely. Cheaper but mixes
      rendering surfaces.
 
-5. **VCF parser + tick renderer + demo track** (~3 h). Worker stub at
+4. **VCF parser + tick renderer + demo track** (~3 h). Worker stub at
    `parser.worker.ts` ready for `@gmod/vcf` + `@gmod/tabix`. Add a
    `dispatchTrack` case (now a small change after `3863615` refactor).
    New `tracks-render/vcf.ts` for tick + tooltip.
    `POLICIES['vcf']` entry in `tile-policy.ts`.
 
-6. **Reference FASTA demo data**. UCSC `chr20.fa.gz` is plain gzip,
-   not bgzip. Need bgzip + .gzi compatible host. Either self-host on
-   the deploy target (chr20 indexed FASTA ~64 MB) or find a publicly
-   hosted bgzipped reference.
-
-7. **300× BAM at chrom-overview span**. `bam.getRecordsForRange` for a
-   33 Mb range with 5,000 reads/kb hangs / fails. Either:
-   - Cap the BAM coverage path to N reads sampled across the range
-   - Or switch to a coarser binSize ceiling so we never request more
-     than ~Y Mb at once.
-   The bandHeight already shrinks to 60 px so the visual isn't bad,
-   but the data layer is still doing wasted work.
-
-8. **Ensembl rate-limit handling** (~30 min). Free tier is 15 req/s.
+5. **Ensembl rate-limit handling** (~30 min). Free tier is 15 req/s.
    Heavy panning storms can hit 429. Add a queue + 65 ms min spacing,
    or cache per (chrom, span-bucket) so repeated pans share a fetch.
 
-9. **HelpOverlay (T2.D.4) + Search palette (T2.D.5) + MiniMap (T2.D.3)**.
+6. **300× BAM at 1 Mb span hangs**. Promoted from the previous
+   "33 Mb overview" gap — observed live at 1 Mb during this arc's
+   bench: HG002 GIAB stays `0 ready / 0 loading / 0 error` for 30+ s
+   while the other 4 tracks resolve. Sticky routing made the other
+   tracks fast and exposed this as the dominant B1 cost. Fix options:
+   - Cap the BAM read path to N sampled reads at coverage tier
+   - Use a coarser binSize ceiling so coverage queries never exceed
+     N kb of reads in a single request
+   - Or just drop the 300× demo from the default seed until #1
+     (single-fetch-per-viewport) lands.
+
+7. **HelpOverlay (T2.D.4) + Search palette (T2.D.5) + MiniMap (T2.D.3)**.
    `?` is a no-op; `g` works via TopBar input but no gene-name search.
    MiniMap spec in DESIGN_SYSTEM §5.
 
-10. **CIGAR + paired-end** for BAM pileup. Currently plain rectangles.
+8. **CIGAR + paired-end** for BAM pileup. Currently plain rectangles.
 
-11. **SDF font for reference base letters** (Reference Path B). At
-    `basePixelWidth >= 12` we should draw actual A/C/G/T characters.
+9. **SDF font for reference base letters** (Reference Path B). At
+   `basePixelWidth >= 12` we should draw actual A/C/G/T characters.
+   The hg19 reference now in the demo (top of stack) renders as Path A
+   coloured 1-bp quads — visually legible at 500 bp, sub-pixel at the
+   default 10 kb span.
 
 ## Architecture debt notes
 
 - **`MinimalRemoteFile`** in `parser.worker.ts` is a tiny shim around
   `fetch` to avoid pulling `generic-filehandle2` as a direct dep. Used
   only by IndexedFasta.
-- **Parser cache scope is per-worker, not global.** 6 pool workers each
-  maintain their own BamFile / BigWig / IndexedFasta map. Round-robin
-  dispatch means first ~6 navs hit cold workers. See carry-forward #1.
+- **Parser cache scope is per-worker, but routing is stable-by-URL**
+  (since `44dd3df`). Each worker still maintains its own BamFile /
+  BigWig / IndexedFasta map, but FNV-1a-on-`req.url` pins every call
+  for a given file to one owning worker, so effectively each URL has
+  one parser instance for the page lifetime. Adding tracks beyond
+  ~6 distinct URLs would still distribute fairly across the pool.
 - **`tileCache` viewport-distance eviction uses `tileWidthBp` for
   midpoint.** Audit if policy ever uses a different tile-indexing
   scheme.
@@ -245,9 +271,13 @@ Then confirm by reporting back:
   - the prescribed plan
   - whether you'll do it lead-side or dispatch sub-agents
 
-Project state: 39 commits, 4 demo tracks live at
-https://chroma-delta.vercel.app, 208/208 tests, B2/B3 60 fps locked,
-B1 cold 1.1 s (gate is 300 ms — see carry-forward #1, #3).
+Project state: 42 commits, 5 demo tracks live at
+https://chroma-delta.vercel.app (hg19 reference at the top,
+genes / phyloP / 2 BAMs below), 208/208 tests, B2/B3 60 fps locked.
+B1 cold is dominated by the 300× GIAB BAM (carry-forward #6) — same-
+URL re-nav is ~3 s after the sticky-routing fix; fresh-region cold
+is still ~8 s and the gate (300 ms) needs carry-forward #1
+(single-fetch-per-viewport).
 
 Tooling note: this machine has `vercel` CLI authenticated to the
 game-tool-team scope. Redeploys: `vercel --prod --scope game-tool-team --yes`.
@@ -276,7 +306,10 @@ Ensembl REST gene/transcript/exon (GRCh38):
   chromMap: 'strip-chr' (API uses bare "20")
   (grch37.rest.ensembl.org for hg19)
 
-Reference FASTA: still deferred — see gap #6.
+hg19 reference FASTA (IGV / Broad mirror, plain .fa + .fai):
+  fa:  https://s3.amazonaws.com/igv.broadinstitute.org/genomes/seq/hg19/hg19.fasta
+  fai: https://s3.amazonaws.com/igv.broadinstitute.org/genomes/seq/hg19/hg19.fasta.fai
+  no chromMap (uses "chr20"); CORS open; LastModified 2013
 ```
 
 ## Deploy

@@ -91,9 +91,11 @@ it.
 - BAM: [1000G HG00096 low-coverage Illumina](https://1000genomes.s3.amazonaws.com/phase3/data/HG00096/alignment/HG00096.mapped.ILLUMINA.bwa.GBR.low_coverage.20120522.bam)
   (15.6 GB on S3; browser only fetches the few KB / MB it needs via
   HTTP Range)
+- BAM: [GIAB HG002 GRCh38 300×](https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/data/AshkenazimTrio/HG002_NA24385_son/NIST_HiSeq_HG002_Homogeneity-10953946/NHGRI_Illumina300X_AJtrio_novoalign_bams/HG002.GRCh38.300x.bam)
 - BigWig: [UCSC phyloP100way conservation, hg19](https://hgdownload.soe.ucsc.edu/goldenPath/hg19/phyloP100way/hg19.100way.phyloP100way.bw)
-- Reference (FASTA): deferred — UCSC per-chrom files are gzip not bgzip,
-  so `@gmod/indexedfasta` needs an external hosting step
+- Gene annotations: Ensembl REST (GRCh38) — `rest.ensembl.org`
+- Reference FASTA: [IGV / Broad hg19](https://s3.amazonaws.com/igv.broadinstitute.org/genomes/seq/hg19/hg19.fasta)
+  (plain `.fa + .fai`, served over HTTP Range with CORS open)
 
 Both demo files use hg19 / GRCh37 so loci line up across the two tracks.
 1000G uses bare chromosome names (`20`); UCSC uses prefixed (`chr20`).
@@ -105,7 +107,6 @@ This is a two-day sprint snapshot. The render and data layers are real;
 the chrome around them is selective:
 
 - **No VCF** — parser stubbed, demo data not seeded (T2.E.1+)
-- **No Reference FASTA demo** — needs bgzip + .gzi hosting
 - **No cross-tile pileup row merge** — reads spanning a tile boundary may
   render twice. Mild on low-coverage data
 - **No help overlay / search palette / minimap** — keyboard shortcuts work;
