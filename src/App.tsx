@@ -8,7 +8,7 @@ import { startUrlSync } from '~state/url-sync';
 import { startTrackEngine } from '~data/track-engine';
 import { setTracks, tracks } from '~state/tracks';
 import { setViewport } from '~state/viewport';
-import type { BamTrack, BigWigTrack, GeneTrack, TrackConfig } from '~state/types';
+import type { BamTrack, BigWigTrack, GeneTrack, ReferenceTrack, TrackConfig } from '~state/types';
 
 /**
  * App shell — M2 prep layout.
@@ -38,15 +38,29 @@ const DEMO_BAM: BamTrack = {
 };
 
 /**
+ * IGV / Broad hg19 reference FASTA — plain (uncompressed) .fa + .fai over
+ * HTTP Range. `@gmod/indexedfasta`'s `IndexedFasta` (not the bgzip variant)
+ * needs only those two files; the per-chrom UCSC .fa.gz files are plain
+ * gzip and unusable, but Broad's S3 mirror has been serving the whole-genome
+ * uncompressed FASTA since 2013 with CORS open. Chromosome naming is "chrN"
+ * → matches viewport canonical form, no chromMap needed. Sits on top of the
+ * stack so the renderer's 1-bp coloured quads sit above pileup/signal/genes
+ * at zoom-in.
+ */
+const DEMO_REFERENCE: ReferenceTrack = {
+  id: 'igv-broad-hg19-fasta',
+  kind: 'reference',
+  label: 'hg19 reference (IGV / Broad)',
+  url: 'https://s3.amazonaws.com/igv.broadinstitute.org/genomes/seq/hg19/hg19.fasta',
+  faiUrl: 'https://s3.amazonaws.com/igv.broadinstitute.org/genomes/seq/hg19/hg19.fasta.fai',
+  visible: true,
+};
+
+/**
  * UCSC phyloP100way (hg19) — whole-genome conservation signal, BigWig.
  * Chromosome names use the "chrN" convention, matching the viewport's
  * canonical form, so no chromMap is needed. Both 1000G HG00096 and phyloP
  * are aligned to hg19/GRCh37, so loci match across the two tracks.
- *
- * Reference (FASTA) demo is deferred — @gmod/indexedfasta needs an indexed
- * .fa + .fai sidecar, and the publicly hosted per-chrom files at UCSC are
- * gzipped (needs bgzip + .gzi, not plain gzip). A separate hosting step is
- * required; tracked in M2-main TODO.
  */
 const DEMO_BIGWIG: BigWigTrack = {
   id: 'ucsc-phyloP100way-hg19',
@@ -92,6 +106,7 @@ const DEMO_GENES: GeneTrack = {
 };
 
 const DEMO_TRACKS: ReadonlyArray<TrackConfig> = [
+  DEMO_REFERENCE,
   DEMO_GENES,
   DEMO_BIGWIG,
   DEMO_BAM_HG38,
