@@ -61,14 +61,30 @@ export interface RenderScheduler {
 // ── Per-kind layout — DESIGN_SYSTEM §5 track heights ──────────────────────
 const TRACK_HEIGHT: Record<TrackKind, number> = {
   reference: 20,
-  bam: 200, // pileup band; coverage uses the same band height
+  bam: 200, // pileup default; coverage tier shrinks via bandHeightFor() below
   bigwig: 80,
   vcf: 28,
   gene: 32,
   bed: 32,
 };
+/** BAM band height when the policy returns a coverage-tier binSize. */
+const BAM_COVERAGE_HEIGHT_PX = 60;
 const TRACK_GAP_PX = 8;
 const TOP_PAD_PX = 16;
+
+/**
+ * Resolve the rendered band height for `(kind, policy)`. For BAM we shrink
+ * the band from 200 → 60 once the policy crosses into coverage tier (binSize
+ * >= 8192 → CoverageTile path) so a thin histogram doesn't fill the same
+ * vertical space as a dense pileup. DESIGN_SYSTEM §5 spec'd coverage = 60
+ * and pileup = 80–400 adaptive; we use a fixed 200 for pileup for now.
+ */
+function bandHeightFor(kind: TrackKind, policy: TilePolicy): number {
+  if (kind === 'bam') {
+    return policy.binSize >= 8192 ? BAM_COVERAGE_HEIGHT_PX : TRACK_HEIGHT.bam;
+  }
+  return TRACK_HEIGHT[kind];
+}
 
 // ── Colors from DESIGN_SYSTEM §2.2 ────────────────────────────────────────
 const COVERAGE_FILL: readonly [number, number, number] = [0.581, 0.643, 0.722]; // --cov-fill #94a3b8
@@ -174,7 +190,7 @@ export function createRenderScheduler(canvas: HTMLCanvasElement): RenderSchedule
       else if (tile.payload === 'reference') references.push(tile);
     }
 
-    const bandHeight = TRACK_HEIGHT[track.kind];
+    const bandHeight = bandHeightFor(track.kind, policy);
 
     if (reads.length > 0) {
       const renderer = ensurePileup(track.id);
@@ -219,12 +235,17 @@ export function createRenderScheduler(canvas: HTMLCanvasElement): RenderSchedule
     const v = viewport();
     const snapshot = tileCache();
     const trackList = tracks();
+    const span = Number(v.end - v.start);
 
     let yOffsetPx = TOP_PAD_PX;
     for (const track of trackList) {
       if (!track.visible) continue;
       drawTrack(track, snapshot, v, yOffsetPx);
-      yOffsetPx += TRACK_HEIGHT[track.kind] + TRACK_GAP_PX;
+      // Advance by the actual rendered height of this band — must match what
+      // drawTrack picks via bandHeightFor(), or tracks below would overlap.
+      const policy = policyFor(track.kind, span);
+      const height = policy ? bandHeightFor(track.kind, policy) : TRACK_HEIGHT[track.kind];
+      yOffsetPx += height + TRACK_GAP_PX;
     }
 
     lastMs = performance.now() - t0;

@@ -5,26 +5,33 @@
  * navigable" right now. The current viewport is a sub-range INSIDE the
  * contextRange, rendered as a draggable selection rectangle on the bar.
  *
- * Default behaviour: when the viewport's chromosome changes, we look up
- * the chromosome length in a built-in hg19 / GRCh37 table and reset
- * contextRange to [0, chromLength]. Users can override later (zoom
- * the ruler itself, etc. — Phase 2).
+ * Default + adaptation rules:
+ *   1. When the viewport's chromosome changes, snap contextRange to the
+ *      full chromosome from the built-in hg19 / GRCh37 length table.
+ *   2. When the viewport stays on the same chromosome, leave the context
+ *      alone — small pans should slide the selection across the bar, not
+ *      re-centre the bar under the user's cursor.
+ *   3. EXCEPT: when the selection would become unusable (occupies < 2 % of
+ *      the bar, > 70 % of the bar, or the viewport has scrolled outside
+ *      the context entirely), debounce 200 ms and then re-fit the context
+ *      to be ~10 × the viewport span centred on the viewport midpoint,
+ *      clamped to the chromosome.
+ *
+ * The debounce is critical: without it, an active drag-to-resize on the
+ * selection block would re-centre the context every frame and the
+ * selection would feel "stuck" under the cursor.
  *
  * Why a fixed hg19 table for now: we don't have the FASTA / .fai sidecar
  * wired (the Reference track demo is deferred), and IGV's own behaviour
- * is to assume whole-chromosome context unless told otherwise. The table
- * is small (24 entries) and public; if we ever support hg38 / mm10 we
- * add another table and key by genome build.
+ * is to assume whole-chromosome context unless told otherwise.
  */
 
-import { createSignal, createEffect } from 'solid-js';
+import { createSignal, createEffect, onCleanup } from 'solid-js';
 import type { Locus } from './types';
 import { viewport } from './viewport';
 
 /**
  * hg19 / GRCh37 chromosome lengths in bp. Source: UCSC chromInfo.txt.
- * Used to seed contextRange when no explicit domain is set. Other genome
- * builds (hg38, mm10) can be added as separate tables keyed by build.
  */
 const HG19_CHROM_LENGTHS: Readonly<Record<string, bigint>> = {
   chr1: 249_250_621n,
@@ -54,22 +61,88 @@ const HG19_CHROM_LENGTHS: Readonly<Record<string, bigint>> = {
   chrM: 16_571n,
 };
 
-/** Fallback when the chromosome isn't in our table (alt contigs, decoy, etc.). */
+/** Fallback when the chromosome isn't in our table. */
 const FALLBACK_LENGTH = 250_000_000n;
 
-/** Normalize bare "20" / "chr20" / "X" to canonical "chrN" for the table lookup. */
 function chromKey(chrom: string): string {
   return chrom.startsWith('chr') ? chrom : `chr${chrom}`;
 }
 
-/**
- * The default context range for a chromosome — full chrom span starting at 0.
- * Exported so callers can preview / reset.
- */
+/** The full-chrom default context for a chromosome. */
 export function defaultContextRange(chrom: string): Locus {
   const length = HG19_CHROM_LENGTHS[chromKey(chrom)] ?? FALLBACK_LENGTH;
   return { chrom, start: 0n, end: length };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Adaptation tunables
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Re-fit if the viewport occupies less than this fraction of the context. */
+const MIN_SELECTION_FRACTION = 0.02;
+/** Re-fit if the viewport occupies more than this fraction of the context. */
+const MAX_SELECTION_FRACTION = 0.7;
+/** When re-fitting, aim for the selection to be 1 / FIT_RATIO of the bar. */
+const FIT_RATIO = 10n;
+/** Debounce before re-fitting so an active drag isn't disrupted. */
+const ADAPT_DEBOUNCE_MS = 200;
+
+/**
+ * Decide whether `ctx` needs to be re-fit for the current `v`, and if so
+ * compute the new context. Returns `null` to mean "keep ctx as-is".
+ *
+ * Pure function — no signal reads. Easy to unit test.
+ */
+export function adaptContextRange(
+  v: { chrom: string; start: bigint; end: bigint },
+  ctx: Locus,
+  fullChrom: Locus,
+): Locus | null {
+  // 1. Chrom mismatch → snap to full chrom of the new chrom.
+  if (v.chrom !== ctx.chrom) {
+    return ctx === fullChrom ? null : fullChrom;
+  }
+
+  const viewportSpan = v.end - v.start;
+  if (viewportSpan <= 0n) return null;
+
+  const contextSpan = ctx.end - ctx.start;
+  if (contextSpan <= 0n) return fullChrom;
+
+  // 2. Viewport entirely outside ctx (e.g. user jumped far away) → re-fit.
+  const outOfBounds = v.start < ctx.start || v.end > ctx.end;
+
+  // 3. Selection too narrow or too wide on the bar → re-fit.
+  const fraction = Number(viewportSpan) / Number(contextSpan);
+  const badFraction =
+    fraction < MIN_SELECTION_FRACTION || fraction > MAX_SELECTION_FRACTION;
+
+  if (!outOfBounds && !badFraction) return null;
+
+  // Aim for the target context span. Clamp to the chromosome.
+  const targetSpan = viewportSpan * FIT_RATIO;
+  const fullSpan = fullChrom.end - fullChrom.start;
+  if (targetSpan >= fullSpan) {
+    return ctx.start === fullChrom.start && ctx.end === fullChrom.end ? null : fullChrom;
+  }
+
+  const viewportMid = v.start + viewportSpan / 2n;
+  const half = targetSpan / 2n;
+  let start = viewportMid > half ? viewportMid - half : 0n;
+  let end = start + targetSpan;
+  if (end > fullChrom.end) {
+    end = fullChrom.end;
+    start = end > targetSpan ? end - targetSpan : fullChrom.start;
+  }
+  if (start < fullChrom.start) start = fullChrom.start;
+
+  if (start === ctx.start && end === ctx.end) return null;
+  return { chrom: v.chrom, start, end };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Signal + reactive effect
+// ─────────────────────────────────────────────────────────────────────────────
 
 const [contextRange, setContextRange] = createSignal<Locus>(
   defaultContextRange('chr20'),
@@ -78,20 +151,38 @@ const [contextRange, setContextRange] = createSignal<Locus>(
   },
 );
 
-/**
- * Effect: when viewport's chromosome changes, reset contextRange to that
- * chromosome's full default span. Idempotent: same-chrom updates are a
- * no-op thanks to the equals function.
- *
- * Runs at module load (outside any reactive root) — emits the usual Solid
- * "computations outside createRoot" warning. Harmless; the contextRange
- * signal is process-wide just like viewport().
- */
+let adaptTimer: ReturnType<typeof setTimeout> | null = null;
+
 createEffect(() => {
   const v = viewport();
   const current = contextRange();
+
+  // Chrom change is immediate — no debounce, no waiting.
   if (current.chrom !== v.chrom) {
+    if (adaptTimer !== null) {
+      clearTimeout(adaptTimer);
+      adaptTimer = null;
+    }
     setContextRange(defaultContextRange(v.chrom));
+    return;
+  }
+
+  // Same chrom: debounce re-fit so an active drag isn't disrupted.
+  if (adaptTimer !== null) clearTimeout(adaptTimer);
+  adaptTimer = setTimeout(() => {
+    adaptTimer = null;
+    const c = contextRange();
+    const vNow = viewport();
+    if (c.chrom !== vNow.chrom) return; // race with chrom change
+    const next = adaptContextRange(vNow, c, defaultContextRange(vNow.chrom));
+    if (next !== null) setContextRange(next);
+  }, ADAPT_DEBOUNCE_MS);
+});
+
+onCleanup(() => {
+  if (adaptTimer !== null) {
+    clearTimeout(adaptTimer);
+    adaptTimer = null;
   }
 });
 
