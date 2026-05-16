@@ -1,10 +1,14 @@
 /**
  * Worker pool — main-thread facade for parser workers.
  *
- * Spawns N Comlink-wrapped parser workers (default min(6, max(2, hwc-1))),
- * round-robins task assignment, and bridges AbortSignal across the worker
- * boundary via a per-task MessageChannel. See parser.worker.ts for the
- * matching abort-watcher.
+ * Spawns N Comlink-wrapped parser workers (default min(6, max(2, hwc-1))) and
+ * bridges AbortSignal across the worker boundary via a per-task MessageChannel.
+ * See parser.worker.ts for the matching abort-watcher.
+ *
+ * Dispatch is stable-by-URL: a request's `url` is hashed (FNV-1a 32) to a
+ * worker index so every request for a given file lands on the same worker,
+ * making the per-worker parser cache in parser.worker.ts effectively act as
+ * a global cache for that URL. URL-less requests fall back to round-robin.
  *
  * Per ARCHITECTURE §2.1 + AGENT_PLAYBOOK §2.2 (agent-data ownership).
  */
@@ -109,12 +113,29 @@ export function createWorkerPool(opts: WorkerPoolOptions = {}): WorkerPool {
   let active = 0;
   let disposed = false;
 
-  function nextWorker(): PoolWorker {
+  function urlToWorkerIndex(url: string, n: number): number {
+    let h = 2166136261;
+    for (let i = 0; i < url.length; i++) {
+      h ^= url.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return (h >>> 0) % n;
+  }
+
+  function workerFor(url: string | undefined): PoolWorker {
     if (workers.length === 0) {
       throw new Error('Worker pool is empty');
     }
-    const idx = rrCounter % workers.length;
-    rrCounter = (rrCounter + 1) % Number.MAX_SAFE_INTEGER;
+    // Stable-by-URL keeps a file's parsed BAI/BBI header on a single worker.
+    // URL-less callers fall back to round-robin to preserve old behavior.
+    const idx =
+      url !== undefined && url.length > 0
+        ? urlToWorkerIndex(url, workers.length)
+        : (() => {
+            const i = rrCounter % workers.length;
+            rrCounter = (rrCounter + 1) % Number.MAX_SAFE_INTEGER;
+            return i;
+          })();
     const w = workers[idx];
     if (!w) throw new Error('Worker pool index miss');
     return w;
@@ -177,7 +198,7 @@ export function createWorkerPool(opts: WorkerPoolOptions = {}): WorkerPool {
       if (disposed) {
         return Promise.reject(new Error('WorkerPool disposed'));
       }
-      const target = nextWorker();
+      const target = workerFor(req.url);
       return withAbortPort<ReadTile | CoverageTile>(signal, (port) =>
         target.remote.parseBamTile(port, req),
       );
@@ -187,7 +208,7 @@ export function createWorkerPool(opts: WorkerPoolOptions = {}): WorkerPool {
       if (disposed) {
         return Promise.reject(new Error('WorkerPool disposed'));
       }
-      const target = nextWorker();
+      const target = workerFor(req.url);
       return withAbortPort<SignalTile>(signal, (port) =>
         target.remote.parseBigWigTile(port, req),
       );
@@ -197,7 +218,7 @@ export function createWorkerPool(opts: WorkerPoolOptions = {}): WorkerPool {
       if (disposed) {
         return Promise.reject(new Error('WorkerPool disposed'));
       }
-      const target = nextWorker();
+      const target = workerFor(req.url);
       return withAbortPort<ReferenceTile>(signal, (port) =>
         target.remote.parseFastaTile(port, req),
       );
@@ -207,7 +228,7 @@ export function createWorkerPool(opts: WorkerPoolOptions = {}): WorkerPool {
       if (disposed) {
         return Promise.reject(new Error('WorkerPool disposed'));
       }
-      const target = nextWorker();
+      const target = workerFor(req.url);
       return withAbortPort<VariantTile>(signal, (port) =>
         target.remote.parseVcfTile(port, req),
       );
