@@ -615,20 +615,18 @@
    over animation polish.
    ------------------------------------------------------------------------- */
 
-.chroma-range-bar {
+/* ─── Chromosome overview bar (top half of the two-level navigator) ──── */
+
+.chroma-overview-bar {
   position: relative;
-  height: 40px;
-  flex: 0 0 40px;
+  height: 32px;
+  flex: 0 0 32px;
   background: var(--surface-1);
   user-select: none;
-  touch-action: none;
-  /* Subtle inset so the bar reads as "below" the topbar without a border. */
   padding: 0 var(--space-3);
 }
 
-/* Meta row: chrom name left, total length right. Tertiary ink reads as a
-   scale annotation, not chrome -- Tufte data-ink rule. */
-.chroma-range-bar-meta {
+.chroma-overview-bar-meta {
   position: absolute;
   inset: 6px var(--space-3) auto var(--space-3);
   display: flex;
@@ -639,12 +637,64 @@
   pointer-events: none;
 }
 
-/* Floating span/position label centered over the selection block midpoint.
-   surface-1 background gives a thin "card" that survives over the track but
-   stays out of the way of the meta row at the edges. */
+.chroma-overview-bar-track {
+  position: absolute;
+  inset: 20px var(--space-3) 8px var(--space-3);
+  background: var(--surface-2);
+  border-radius: 2px;
+}
+
+/* Tick: 1-px vertical line crossing the track, with a label perched above. */
+.chroma-overview-bar-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--ink-tertiary);
+  opacity: 0.35;
+  pointer-events: none;
+  transform: translateX(-0.5px);
+}
+
+.chroma-overview-bar-tick-label {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translate(-50%, -2px);
+  font: 9px / 1 var(--font-mono);
+  color: var(--ink-tertiary);
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+
+/* Viewport-as-window: a thin accented overlay; min-width is floored in JS so
+   even sub-pixel viewports stay visible as a 2-3 px sliver. */
+.chroma-overview-bar-highlight {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  background: color-mix(in srgb, var(--accent) 40%, transparent);
+  border-left: 1px solid var(--accent);
+  border-right: 1px solid var(--accent);
+  pointer-events: none;
+}
+
+/* ─── Local range bar (bottom half — zoomed, interactive) ────────────── */
+
+.chroma-range-bar {
+  position: relative;
+  height: 36px;
+  flex: 0 0 36px;
+  background: var(--surface-1);
+  user-select: none;
+  touch-action: none;
+  padding: 0 var(--space-3);
+}
+
+/* Floating span / start-position chip centred over the selection block. */
 .chroma-range-bar-label {
   position: absolute;
-  top: 6px;
+  top: 4px;
   transform: translateX(-50%);
   font: 10px / 1 var(--font-mono);
   color: var(--ink-secondary);
@@ -652,25 +702,48 @@
   pointer-events: none;
   background: var(--surface-1);
   padding: 0 4px;
-  z-index: 1;
+  z-index: 2;
 }
 
 .chroma-range-bar-track {
   position: absolute;
-  inset: 22px var(--space-3) 8px var(--space-3);
+  inset: 20px var(--space-3) 8px var(--space-3);
   background: var(--surface-2);
   border-radius: 2px;
 }
 
+/* Local ticks share the overview's visual treatment but anchor to the
+   local-context-range domain — labels above the track band. */
+.chroma-range-bar-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--ink-tertiary);
+  opacity: 0.3;
+  pointer-events: none;
+  transform: translateX(-0.5px);
+}
+
+.chroma-range-bar-tick-label {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translate(-50%, -2px);
+  font: 9px / 1 var(--font-mono);
+  color: var(--ink-tertiary);
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+
 .chroma-range-bar-selection {
   position: absolute;
-  top: 20px;
+  top: 18px;
   bottom: 6px;
   background: color-mix(in srgb, var(--accent) 35%, transparent);
   border: 1px solid var(--accent);
   border-radius: 2px;
-  /* The inner border-radius and 1-px line look right against the track
-     and survive both themes via the accent token. */
+  z-index: 1;
 }
 
 .chroma-range-bar-edge {

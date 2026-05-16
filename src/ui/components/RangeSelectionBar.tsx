@@ -1,5 +1,5 @@
-import { createMemo, createSignal, onCleanup, onMount, Show } from 'solid-js';
-import { contextRange, defaultContextRange } from '~state/context-range';
+import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import { contextRange } from '~state/context-range';
 import {
   panBpWithin,
   resizeViewportEdge,
@@ -7,6 +7,11 @@ import {
 } from '~state/viewport-actions';
 import { setViewport, viewport } from '~state/viewport';
 import { contextToFraction, fractionToContext } from '~render/coord';
+import {
+  computeTicks,
+  formatPosition,
+  formatSpan,
+} from './ruler-helpers';
 
 /**
  * Top-level genomic range selector — a DAW-style overview bar that shows
@@ -27,25 +32,7 @@ import { contextToFraction, fractionToContext } from '~render/coord';
 
 const EDGE_PX = 6; // hit-test threshold for resize handles
 const MIN_VISIBLE_PX = 3; // visual floor for the selection rectangle
-
-function formatSpan(bp: number): string {
-  if (bp < 1000) return `${bp} bp`;
-  if (bp < 1_000_000) return `${(bp / 1000).toFixed(bp < 10_000 ? 2 : 1)} kb`;
-  return `${(bp / 1_000_000).toFixed(2)} Mb`;
-}
-
-function formatPosition(bp: bigint): string {
-  const n = Number(bp);
-  if (n < 1000) return `${n} bp`;
-  if (n < 1_000_000) return `${(n / 1000).toFixed(1)} kb`;
-  return `${(n / 1_000_000).toFixed(1)} Mb`;
-}
-
-function formatTotal(bp: bigint): string {
-  const n = Number(bp);
-  if (n < 1_000_000) return `${(n / 1000).toFixed(0)} kb`;
-  return `${(n / 1_000_000).toFixed(1)} Mb`;
-}
+const LOCAL_TICK_TARGET = 5;
 
 type DragMode = 'create' | 'move' | 'resize-start' | 'resize-end';
 
@@ -309,27 +296,17 @@ export function RangeSelectionBar() {
     if (v.chrom !== r.chrom) return null;
     const span = Number(v.end - v.start);
     if (span <= 0) return null;
-    const midBp = (v.start + v.end) / 2n;
+    // Anchor the chip at the visual midpoint of the block, but display the
+    // viewport START — that matches the TopBar locus `chrN:start-end` and
+    // is what users navigate by.
     const midFrac = (sel.left + sel.right) / 2;
-    // `midBp` is absolute genomic position — the user reads it against the
-    // chrom total on the right edge of the bar. No percentage here: the bar
-    // visualises the adapted context, not the whole chromosome, so a "%"
-    // label on the block would disagree with the eye.
     return {
-      text: `${formatSpan(span)} · ${formatPosition(midBp)}`,
+      text: `${formatSpan(span)} · ${formatPosition(v.start)}`,
       leftPct: midFrac * 100,
     };
   });
 
-  // Total length is the WHOLE chromosome (CHROMS table via defaultContextRange),
-  // not the auto-adapted context — that's what the user means by "total length".
-  const totalLengthLabel = createMemo<string>(() => {
-    const r = contextRange();
-    const chrom = defaultContextRange(r.chrom);
-    return formatTotal(chrom.end - chrom.start);
-  });
-
-  const chromLabel = createMemo<string>(() => contextRange().chrom);
+  const localTicks = createMemo(() => computeTicks(contextRange(), LOCAL_TICK_TARGET));
 
   return (
     <div
@@ -344,10 +321,6 @@ export function RangeSelectionBar() {
       onPointerCancel={endDrag}
       onPointerLeave={handlePointerLeave}
     >
-      <div class="chroma-range-bar-meta" aria-hidden="true">
-        <span class="chroma-range-bar-meta-chrom">{chromLabel()}</span>
-        <span class="chroma-range-bar-meta-total">{totalLengthLabel()}</span>
-      </div>
       <Show when={selectionLabel()}>
         {(label) => (
           <div
@@ -359,7 +332,19 @@ export function RangeSelectionBar() {
           </div>
         )}
       </Show>
-      <div class="chroma-range-bar-track" aria-hidden="true" />
+      <div class="chroma-range-bar-track" aria-hidden="true">
+        <For each={localTicks()}>
+          {(t) => (
+            <div
+              class="chroma-range-bar-tick"
+              style={{ left: `${t.fraction * 100}%` }}
+              aria-hidden="true"
+            >
+              <span class="chroma-range-bar-tick-label">{t.label}</span>
+            </div>
+          )}
+        </For>
+      </div>
       <Show when={selectionStyle()}>
         {(style) => (
           <div class="chroma-range-bar-selection" style={style()}>

@@ -3,6 +3,7 @@ import { TopBar } from '~ui/components/TopBar';
 import { TrackPanel } from '~ui/components/TrackPanel';
 import { GenomeView } from '~ui/components/GenomeView';
 import { RangeSelectionBar } from '~ui/components/RangeSelectionBar';
+import { ChromosomeOverviewBar } from '~ui/components/ChromosomeOverviewBar';
 import { useGlobalShortcuts } from '~ui/shortcuts/global-shortcuts';
 import { startUrlSync } from '~state/url-sync';
 import { startTrackEngine } from '~data/track-engine';
@@ -149,6 +150,7 @@ export default function App() {
       <TopBar />
       <TrackPanel />
       <main class="chroma-main">
+        <ChromosomeOverviewBar />
         <RangeSelectionBar />
         <GenomeView />
       </main>
