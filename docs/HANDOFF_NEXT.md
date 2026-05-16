@@ -1,7 +1,7 @@
 # HANDOFF_NEXT — picking the project back up
 
-> Updated at the end of the single-fetch + reference-letters arc.
-> Replaces the earlier handoff written at commit `5d2bac8`. Snapshot of
+> Updated at the end of the palette + ruler-chip + GIAB-hide arc.
+> Replaces the earlier handoff written at commit `2fe9fe3`. Snapshot of
 > what's in `main`, what's wired, what's parked, and the exact prompt to
 > drop into the next session.
 
@@ -10,11 +10,10 @@
 ## Project at a glance
 
 ```
-45 commits on main, single trunk.
-213 / 213 unit tests pass (vitest; new: ACGTN decoder, atlas fallback,
-                          basePixelWidth threshold, 5 vp-policy rows).
+47 commits on main, single trunk.
+213 / 213 unit tests pass (vitest).
 TypeScript 6 strict + noUncheckedIndexedAccess clean.
-Production build: ~88 kB main JS + ~22 kB CSS gzipped 31 + 5 kB
+Production build: ~88 kB main JS + ~23 kB CSS gzipped 31 + 5 kB
                   + ~190 kB parser.worker chunk (separate, ~40 kB gz).
 Live demo: https://chroma-delta.vercel.app  (Vercel scope: game-tool-team)
 ```
@@ -100,7 +99,8 @@ Bench results:
 | --- | --- | --- | --- |
 | B1 cold 10 kb, 1 BAM (HG00096), fresh region — pileup tier vp mode | **774 ms** | 300 ms | ⚠️ |
 | B1 cold 10 kb, 1 BAM (HG00096), pre-vp tile-binning | 4.7 s | 300 ms | ❌ |
-| B1 cold 10 kb, 5-track default demo | 4 – 14 s (GIAB read fetch dominates) | 300 ms | ❌ |
+| B1 cold 10 kb, default demo with GIAB hidden (4 visible tracks) | **3.16 s** | 300 ms | ⚠️ |
+| B1 cold 10 kb, all-5-track demo (GIAB visible) | 4 – 14 s (300× dominates) | 300 ms | ❌ |
 | B2 pan avg / p95 fps | 59.9 / 59.5 (pre-arc) | 60 / 50 | ✅ |
 | B3 zoom avg fps | 59.9 (pre-arc) | 60 | ✅ |
 | B5 heap (5 tracks) | < 50 MB | 300 MB | ✅ |
@@ -132,6 +132,7 @@ returns `{ b1, b2, b3, report }`.
 | `79e694e` | hg19 reference FASTA seeded at top of demo stack (IGV / Broad mirror) |
 | `62e1a49` | BAM pileup-tier single-fetch-per-viewport (vp mode in TilePolicy) — 1-track 10 kb cold 4.7 s → 774 ms |
 | `095b12c` | Reference Path B base letters at `basePixelWidth ≥ 12 px` + decoder/writer 4-bit format fix (Path A colours had been wrong since FASTA landed) |
+| `24618aa` | Refined base palette (sage / slate / amber / coral / warm gray) + ruler scale (chrom + total length) + selection chip (`{span} · {midPos}`) + default-hide HG002 GIAB 300× — closes default-demo B1 from 9.4 s to 3.16 s |
 
 ## Known gaps + carry-forward (updated)
 
@@ -152,15 +153,16 @@ Remaining, ordered roughly by ROI:
 
 1. **300× BAM is a B1 long-tail at every tier**. The worker profile
    nailed both costs: 6.6 s one-time BAI parse + 4.2 s
-   `getRecordsForRange` per 10 kb call on dense (300×) regions. The
-   1 Mb hang documented previously is the same root cause. Options:
-   - **Cheapest** — default-hide HG002 GIAB 300× (still in the demo
-     stack, but `visible:false`). Closes the gate for the default
-     out-of-box experience without touching worker code.
-   - **Next** — cap read fetch at N (e.g. 5 000) at the worker level
-     via streamed iteration and early-break.
-   - **Eventually** — pre-built coverage sidecar (.bai-aligned read
-     density) so coverage-tier doesn't pay per-read parse.
+   `getRecordsForRange` per 10 kb call on dense (300×) regions.
+   - ✅ **Default-hidden in `24618aa`** — default-demo B1 dropped
+     from 9.4 s to 3.16 s. The 3.16 s is now HG00096's BAI parse
+     (~3.7 s one-time), which decays to sub-second on subsequent
+     navs in the same session.
+   - Remaining for when a user manually shows GIAB: cap read fetch at
+     N (e.g. 5 000) at the worker level via streamed iteration and
+     early-break.
+   - Eventually: pre-built coverage sidecar (.bai-aligned read
+     density) so coverage-tier doesn't pay per-read parse at all.
 
 2. **Cross-tile pileup row merge** (~1 h). `bam-pileup.ts` assigns
    pileup rows per-tile; reads at tile boundaries draw twice (less
@@ -268,14 +270,15 @@ Then confirm by reporting back:
   - the prescribed plan
   - whether you'll do it lead-side or dispatch sub-agents
 
-Project state: 45 commits, 5 demo tracks live at
-https://chroma-delta.vercel.app (hg19 reference at the top with real
-A/C/G/T letters above basePixelWidth ≥ 12, genes / phyloP / 2 BAMs
-below), 213/213 tests, B2/B3 60 fps locked. After this arc, the 300 ms
-gate is blocked by carry-forward #1 (300× BAM BAI parse + read-fetch
-cost) — single-fetch (pileup tier) and sticky routing have already
-been shipped. Default-hiding GIAB is the next cheap win; cap-at-N
-read fetch is the next deeper fix.
+Project state: 47 commits, 5 demo tracks (4 visible by default — GIAB
+300× is now `visible:false` to keep B1 snappy), live at
+https://chroma-delta.vercel.app. Refined sage/slate/amber/coral base
+palette; reference shows real A/C/G/T letters when basePixelWidth ≥ 12.
+RangeSelectionBar grew to 40 px with chromosome + total-length meta
+labels and a floating "{span} · {midPos}" chip above the selection
+block. 213/213 tests, B2/B3 60 fps locked. Default-demo B1 cold is
+~3.16 s (HG00096 BAI parse one-shot). 300 ms gate not yet hit;
+worker-level cap-at-N read fetch is the next deep optimisation.
 
 Tooling note: this machine has `vercel` CLI authenticated to the
 game-tool-team scope. Redeploys: `vercel --prod --scope game-tool-team --yes`.
