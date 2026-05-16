@@ -77,12 +77,13 @@
   --strand-forward: #6699cc;   /* 柔和蓝 */
   --strand-reverse: #cc7a85;   /* 柔和粉红 */
 
-  /* Bases — 区分度优先于"好看" */
-  --base-A: #4caf50;           /* 绿 */
-  --base-C: #2196f3;           /* 蓝 */
-  --base-G: #ff9800;           /* 橙 */
-  --base-T: #f44336;           /* 红 */
-  --base-N: #9e9e9e;           /* 灰 */
+  /* Bases — Okabe-Ito hue separations, desaturated so large fills
+     satisfy Sec 2.3 (saturation > 80 forbidden as background) */
+  --base-A: #6fa572;           /* sage   */
+  --base-C: #6488b5;           /* slate  */
+  --base-G: #c99966;           /* amber  */
+  --base-T: #c97a7a;           /* coral  */
+  --base-N: #acaaa6;           /* warm gray */
 
   /* Variant types (VCF) */
   --var-snv:   #e69f00;

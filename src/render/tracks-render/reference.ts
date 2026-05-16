@@ -27,8 +27,10 @@ import { float32Pool } from '../webgl/buffer-pool';
 import { buildViewMatrix } from '../coord';
 import type { ReferenceTile, Viewport } from '~state/types';
 
-// Base colors from DESIGN_SYSTEM Sec 2.2.
-//   A: #4caf50, C: #2196f3, G: #ff9800, T: #f44336, N: #9e9e9e
+// Base colors from DESIGN_SYSTEM Sec 2.2 (refined palette — desaturated so
+// large fills satisfy Sec 2.3 "saturation > 80 not allowed", keeping hue
+// separations for colour-blind safety).
+//   A: #6FA572 sage, C: #6488B5 slate, G: #C99966 amber, T: #C97A7A coral, N: #ACAAA6
 const VERT_SRC = /* glsl */ `#version 300 es
 precision highp float;
 
@@ -42,11 +44,11 @@ out vec2 v_localUV;
 flat out int v_baseCode;
 
 const vec3 BASE_COLORS[5] = vec3[5](
-  vec3(0.298, 0.686, 0.314),  // A
-  vec3(0.129, 0.588, 0.953),  // C
-  vec3(1.000, 0.596, 0.000),  // G
-  vec3(0.957, 0.263, 0.212),  // T
-  vec3(0.620, 0.620, 0.620)   // N
+  vec3(0.435, 0.647, 0.447),  // A — sage
+  vec3(0.392, 0.533, 0.710),  // C — slate
+  vec3(0.788, 0.600, 0.400),  // G — amber
+  vec3(0.788, 0.478, 0.478),  // T — coral
+  vec3(0.675, 0.667, 0.651)   // N — warm gray
 );
 
 void main() {
@@ -82,8 +84,10 @@ void main() {
     float u = (float(v_baseCode) + v_localUV.x) / 5.0;
     float v = v_localUV.y;
     float a = texture(u_letters, vec2(u, v)).r;
-    // Composite opaque black glyph over the base color.
-    color = mix(color, vec3(0.0), a);
+    // Composite near-black glyph (matches --ink-primary #18181b) over the
+    // softer base background — pure black would feel jarring on the refined
+    // palette.
+    color = mix(color, vec3(0.094, 0.094, 0.106), a);
   }
   outColor = vec4(color, 1.0);
 }

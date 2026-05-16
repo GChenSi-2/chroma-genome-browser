@@ -1,5 +1,5 @@
 import { createMemo, createSignal, onCleanup, onMount, Show } from 'solid-js';
-import { contextRange } from '~state/context-range';
+import { contextRange, defaultContextRange } from '~state/context-range';
 import {
   panBpWithin,
   resizeViewportEdge,
@@ -27,6 +27,25 @@ import { contextToFraction, fractionToContext } from '~render/coord';
 
 const EDGE_PX = 6; // hit-test threshold for resize handles
 const MIN_VISIBLE_PX = 3; // visual floor for the selection rectangle
+
+function formatSpan(bp: number): string {
+  if (bp < 1000) return `${bp} bp`;
+  if (bp < 1_000_000) return `${(bp / 1000).toFixed(bp < 10_000 ? 2 : 1)} kb`;
+  return `${(bp / 1_000_000).toFixed(2)} Mb`;
+}
+
+function formatPosition(bp: bigint): string {
+  const n = Number(bp);
+  if (n < 1000) return `${n} bp`;
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)} kb`;
+  return `${(n / 1_000_000).toFixed(1)} Mb`;
+}
+
+function formatTotal(bp: bigint): string {
+  const n = Number(bp);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(0)} kb`;
+  return `${(n / 1_000_000).toFixed(1)} Mb`;
+}
 
 type DragMode = 'create' | 'move' | 'resize-start' | 'resize-end';
 
@@ -282,6 +301,36 @@ export function RangeSelectionBar() {
     };
   });
 
+  const selectionLabel = createMemo<{ text: string; leftPct: number } | null>(() => {
+    const sel = selectionFraction();
+    if (!sel) return null;
+    const v = viewport();
+    const r = contextRange();
+    if (v.chrom !== r.chrom) return null;
+    const span = Number(v.end - v.start);
+    if (span <= 0) return null;
+    const midBp = (v.start + v.end) / 2n;
+    const midFrac = (sel.left + sel.right) / 2;
+    // `midBp` is absolute genomic position — the user reads it against the
+    // chrom total on the right edge of the bar. No percentage here: the bar
+    // visualises the adapted context, not the whole chromosome, so a "%"
+    // label on the block would disagree with the eye.
+    return {
+      text: `${formatSpan(span)} · ${formatPosition(midBp)}`,
+      leftPct: midFrac * 100,
+    };
+  });
+
+  // Total length is the WHOLE chromosome (CHROMS table via defaultContextRange),
+  // not the auto-adapted context — that's what the user means by "total length".
+  const totalLengthLabel = createMemo<string>(() => {
+    const r = contextRange();
+    const chrom = defaultContextRange(r.chrom);
+    return formatTotal(chrom.end - chrom.start);
+  });
+
+  const chromLabel = createMemo<string>(() => contextRange().chrom);
+
   return (
     <div
       class="chroma-range-bar"
@@ -295,6 +344,21 @@ export function RangeSelectionBar() {
       onPointerCancel={endDrag}
       onPointerLeave={handlePointerLeave}
     >
+      <div class="chroma-range-bar-meta" aria-hidden="true">
+        <span class="chroma-range-bar-meta-chrom">{chromLabel()}</span>
+        <span class="chroma-range-bar-meta-total">{totalLengthLabel()}</span>
+      </div>
+      <Show when={selectionLabel()}>
+        {(label) => (
+          <div
+            class="chroma-range-bar-label"
+            style={{ left: `${label().leftPct}%` }}
+            aria-hidden="true"
+          >
+            {label().text}
+          </div>
+        )}
+      </Show>
       <div class="chroma-range-bar-track" aria-hidden="true" />
       <Show when={selectionStyle()}>
         {(style) => (

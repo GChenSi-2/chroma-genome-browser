@@ -86,7 +86,10 @@ const DEMO_BAM_HG38: BamTrack = {
   url: 'https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/data/AshkenazimTrio/HG002_NA24385_son/NIST_HiSeq_HG002_Homogeneity-10953946/NHGRI_Illumina300X_AJtrio_novoalign_bams/HG002.GRCh38.300x.bam',
   indexUrl:
     'https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/data/AshkenazimTrio/HG002_NA24385_son/NIST_HiSeq_HG002_Homogeneity-10953946/NHGRI_Illumina300X_AJtrio_novoalign_bams/HG002.GRCh38.300x.bam.bai',
-  visible: true,
+  // Hidden by default: 300× coverage costs ~6.6 s BAI parse + ~4.2 s read
+  // fetch per 10 kb nav (per HANDOFF_NEXT carry-forward #1). Available in
+  // the track panel for users who want it; default boot stays snappy.
+  visible: false,
 };
 
 /**
