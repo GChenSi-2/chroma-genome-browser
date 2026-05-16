@@ -90,8 +90,24 @@ export interface ReferenceTrack extends TrackBase {
 
 export interface GeneTrack extends TrackBase {
   kind: 'gene';
-  /** GFF / BED format autodetected; explicit hint preferred. */
-  format?: 'gff' | 'bed';
+  /**
+   * Data-source format. `'ensembl-rest'` calls the Ensembl REST API
+   * (per-region overlap query, no static file). `'gff'` and `'bed'` are
+   * placeholders for tabix-indexed flat files (M2 main).
+   */
+  format?: 'gff' | 'bed' | 'ensembl-rest';
+  /**
+   * Ensembl REST host. Defaults to GRCh38 (`https://rest.ensembl.org`);
+   * use `https://grch37.rest.ensembl.org` for hg19. Only consulted when
+   * `format === 'ensembl-rest'`.
+   */
+  ensemblHost?: string;
+  /**
+   * Ensembl uses bare chrom names ("20", "X"). The viewport's
+   * locus-parser canonicalises to "chr20"; `strip-chr` removes it
+   * before the API call. Mirrors BamTrack.chromMap.
+   */
+  chromMap?: 'strip-chr' | 'add-chr';
 }
 
 export type TrackConfig =
@@ -178,6 +194,39 @@ export interface ReferenceTile extends TileMetaBase {
   baseCount: number;
 }
 
+/**
+ * Gene annotation tile — gene / transcript / exon features.
+ *
+ * Records use absolute genomic coords as bigint (consistent with viewport
+ * coords). Strand: +1, -1, 0 (unknown).
+ *
+ * Type field uses a flat enum across all 3 feature levels so the renderer
+ * can iterate the array once. `parentId` lets us reconstruct the gene →
+ * transcript → exon hierarchy without a nested structure.
+ */
+export type GeneFeatureType = 'gene' | 'transcript' | 'exon';
+
+export interface GeneFeature {
+  /** Stable identifier — Ensembl ID, etc. */
+  id: string;
+  /** Display name (HGNC symbol for genes, ENST for transcripts, etc.). */
+  name: string;
+  type: GeneFeatureType;
+  start: GenomicCoord;
+  end: GenomicCoord;
+  strand: -1 | 0 | 1;
+  /** id of the parent feature (gene for transcripts, transcript for exons). */
+  parentId: string | null;
+  /** Optional biotype: 'protein_coding', 'lncRNA', etc. */
+  biotype?: string;
+}
+
+export interface GeneTile extends TileMetaBase {
+  payload: 'gene';
+  /** Sorted by start. Inline because counts are low (~hundreds per tile). */
+  features: GeneFeature[];
+}
+
 /** VCF variant tile. */
 export interface VariantTile extends TileMetaBase {
   payload: 'variants';
@@ -199,7 +248,8 @@ export type Tile =
   | CoverageTile
   | SignalTile
   | ReferenceTile
-  | VariantTile;
+  | VariantTile
+  | GeneTile;
 
 export type TileStatus =
   | { state: 'pending' }

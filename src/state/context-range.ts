@@ -31,46 +31,54 @@ import type { Locus } from './types';
 import { viewport } from './viewport';
 
 /**
- * hg19 / GRCh37 chromosome lengths in bp. Source: UCSC chromInfo.txt.
+ * hg19 / GRCh37 and hg38 / GRCh38 chromosome lengths in bp. Source: UCSC
+ * chromInfo.txt. The two builds differ by 1-2 % per chromosome, mostly from
+ * the GRCh38 alt-contig integration and centromere-region updates. We
+ * default to GRCh38 since that's the newer standard; for hg19 demo tracks
+ * the difference is small enough that the bar never overshoots noticeably.
+ *
+ * If a future track needs exact-build precision (e.g. centromere markup),
+ * we can extend BamTrack with an `assembly` field and look up the right
+ * table per track.
  */
-const HG19_CHROM_LENGTHS: Readonly<Record<string, bigint>> = {
-  chr1: 249_250_621n,
-  chr2: 243_199_373n,
-  chr3: 198_022_430n,
-  chr4: 191_154_276n,
-  chr5: 180_915_260n,
-  chr6: 171_115_067n,
-  chr7: 159_138_663n,
-  chr8: 146_364_022n,
-  chr9: 141_213_431n,
-  chr10: 135_534_747n,
-  chr11: 135_006_516n,
-  chr12: 133_851_895n,
-  chr13: 115_169_878n,
-  chr14: 107_349_540n,
-  chr15: 102_531_392n,
-  chr16: 90_354_753n,
-  chr17: 81_195_210n,
-  chr18: 78_077_248n,
-  chr19: 59_128_983n,
-  chr20: 63_025_520n,
-  chr21: 48_129_895n,
-  chr22: 51_304_566n,
-  chrX: 155_270_560n,
-  chrY: 59_373_566n,
-  chrM: 16_571n,
+const HG38_CHROM_LENGTHS: Readonly<Record<string, bigint>> = {
+  chr1: 248_956_422n,
+  chr2: 242_193_529n,
+  chr3: 198_295_559n,
+  chr4: 190_214_555n,
+  chr5: 181_538_259n,
+  chr6: 170_805_979n,
+  chr7: 159_345_973n,
+  chr8: 145_138_636n,
+  chr9: 138_394_717n,
+  chr10: 133_797_422n,
+  chr11: 135_086_622n,
+  chr12: 133_275_309n,
+  chr13: 114_364_328n,
+  chr14: 107_043_718n,
+  chr15: 101_991_189n,
+  chr16: 90_338_345n,
+  chr17: 83_257_441n,
+  chr18: 80_373_285n,
+  chr19: 58_617_616n,
+  chr20: 64_444_167n,
+  chr21: 46_709_983n,
+  chr22: 50_818_468n,
+  chrX: 156_040_895n,
+  chrY: 57_227_415n,
+  chrM: 16_569n,
 };
 
-/** Fallback when the chromosome isn't in our table. */
+/** Fallback when the chromosome isn't in our table (alt contigs, decoy, etc.). */
 const FALLBACK_LENGTH = 250_000_000n;
 
 function chromKey(chrom: string): string {
   return chrom.startsWith('chr') ? chrom : `chr${chrom}`;
 }
 
-/** The full-chrom default context for a chromosome. */
+/** The full-chrom default context for a chromosome (uses GRCh38 lengths). */
 export function defaultContextRange(chrom: string): Locus {
-  const length = HG19_CHROM_LENGTHS[chromKey(chrom)] ?? FALLBACK_LENGTH;
+  const length = HG38_CHROM_LENGTHS[chromKey(chrom)] ?? FALLBACK_LENGTH;
   return { chrom, start: 0n, end: length };
 }
 

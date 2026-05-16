@@ -8,7 +8,7 @@ import { startUrlSync } from '~state/url-sync';
 import { startTrackEngine } from '~data/track-engine';
 import { setTracks, tracks } from '~state/tracks';
 import { setViewport } from '~state/viewport';
-import type { BamTrack, BigWigTrack, TrackConfig } from '~state/types';
+import type { BamTrack, BigWigTrack, GeneTrack, TrackConfig } from '~state/types';
 
 /**
  * App shell — M2 prep layout.
@@ -56,7 +56,47 @@ const DEMO_BIGWIG: BigWigTrack = {
   visible: true,
 };
 
-const DEMO_TRACKS: ReadonlyArray<TrackConfig> = [DEMO_BIGWIG, DEMO_BAM];
+/**
+ * GIAB HG002 GRCh38 300x — NCBI-hosted, CORS-open, BAI 11.7 MB. 300x coverage
+ * means every locus has dense data (no apparent "gaps" from sparse coverage
+ * like the 1000G low-coverage demo). The BAM uses canonical "chrN" naming,
+ * matching the viewport's locus-parser auto-prefix, so no chromMap needed.
+ *
+ * This is the same reference as IGV's own "GIAB HG002" demo. File is 601 GB
+ * total; the browser only fetches the few KB it needs per tile via Range.
+ */
+const DEMO_BAM_HG38: BamTrack = {
+  id: 'giab-hg002-grch38-300x',
+  kind: 'bam',
+  label: 'HG002 · GIAB GRCh38 300×',
+  url: 'https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/data/AshkenazimTrio/HG002_NA24385_son/NIST_HiSeq_HG002_Homogeneity-10953946/NHGRI_Illumina300X_AJtrio_novoalign_bams/HG002.GRCh38.300x.bam',
+  indexUrl:
+    'https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/data/AshkenazimTrio/HG002_NA24385_son/NIST_HiSeq_HG002_Homogeneity-10953946/NHGRI_Illumina300X_AJtrio_novoalign_bams/HG002.GRCh38.300x.bam.bai',
+  visible: true,
+};
+
+/**
+ * Ensembl REST gene annotation (GRCh38). Pulls gene + transcript + exon
+ * features from the public Ensembl REST API in 1-Mb chunks. CORS-open;
+ * uses bare chrom names so chromMap='strip-chr'.
+ */
+const DEMO_GENES: GeneTrack = {
+  id: 'ensembl-grch38-genes',
+  kind: 'gene',
+  label: 'Ensembl · genes (GRCh38)',
+  url: 'https://rest.ensembl.org',
+  format: 'ensembl-rest',
+  ensemblHost: 'https://rest.ensembl.org',
+  chromMap: 'strip-chr',
+  visible: true,
+};
+
+const DEMO_TRACKS: ReadonlyArray<TrackConfig> = [
+  DEMO_GENES,
+  DEMO_BIGWIG,
+  DEMO_BAM_HG38,
+  DEMO_BAM,
+];
 
 export default function App() {
   useGlobalShortcuts();

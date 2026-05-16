@@ -3,11 +3,11 @@ import { defaultContextRange } from '~state/context-range';
 
 describe('defaultContextRange', () => {
   it.each([
-    ['chr1', 249_250_621n],
-    ['chr20', 63_025_520n],
-    ['chrX', 155_270_560n],
-    ['chrM', 16_571n],
-  ] as const)('returns hg19 length for %s', (chrom, expected) => {
+    ['chr1', 248_956_422n],
+    ['chr20', 64_444_167n],
+    ['chrX', 156_040_895n],
+    ['chrM', 16_569n],
+  ] as const)('returns GRCh38 length for %s', (chrom, expected) => {
     const r = defaultContextRange(chrom);
     expect(r.chrom).toBe(chrom);
     expect(r.start).toBe(0n);
@@ -15,9 +15,9 @@ describe('defaultContextRange', () => {
   });
 
   it.each([
-    ['1', 249_250_621n], // bare chrom name → normalized to chr1
-    ['20', 63_025_520n],
-    ['X', 155_270_560n],
+    ['1', 248_956_422n], // bare chrom name → normalized to chr1
+    ['20', 64_444_167n],
+    ['X', 156_040_895n],
   ] as const)('normalizes bare chrom %s to chr-prefixed table lookup', (chrom, expected) => {
     const r = defaultContextRange(chrom);
     expect(r.chrom).toBe(chrom); // preserves caller's chrom name

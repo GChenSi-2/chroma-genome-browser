@@ -32,15 +32,18 @@ import {
   createCoverageRenderer,
   createBigWigRenderer,
   createReferenceRenderer,
+  createGeneRenderer,
   maxAcrossTiles,
   maxAcrossSignalTiles,
   type PileupRenderer,
   type CoverageRenderer,
   type BigWigRenderer,
   type ReferenceRenderer,
+  type GeneRenderer,
 } from '~render/tracks-render';
 import type {
   CoverageTile,
+  GeneTile,
   ReadTile,
   ReferenceTile,
   SignalTile,
@@ -64,7 +67,7 @@ const TRACK_HEIGHT: Record<TrackKind, number> = {
   bam: 200, // pileup default; coverage tier shrinks via bandHeightFor() below
   bigwig: 80,
   vcf: 28,
-  gene: 32,
+  gene: 90, // gene + multi-transcript stacks; ~5 rows of 18 px each
   bed: 32,
 };
 /** BAM band height when the policy returns a coverage-tier binSize. */
@@ -163,6 +166,16 @@ export function createRenderScheduler(canvas: HTMLCanvasElement): RenderSchedule
     return r;
   };
 
+  const geneRenderers = new Map<string, GeneRenderer>();
+  const ensureGene = (trackId: string): GeneRenderer => {
+    let r = geneRenderers.get(trackId);
+    if (!r) {
+      r = createGeneRenderer(ctx.gl);
+      geneRenderers.set(trackId, r);
+    }
+    return r;
+  };
+
   const drawTrack = (
     track: TrackConfig,
     snapshot: ReadonlyMap<TileKey, TileStatus>,
@@ -183,11 +196,13 @@ export function createRenderScheduler(canvas: HTMLCanvasElement): RenderSchedule
     const coverages: CoverageTile[] = [];
     const signals: SignalTile[] = [];
     const references: ReferenceTile[] = [];
+    const genes: GeneTile[] = [];
     for (const tile of trackTiles) {
       if (tile.payload === 'reads') reads.push(tile);
       else if (tile.payload === 'coverage') coverages.push(tile);
       else if (tile.payload === 'signal') signals.push(tile);
       else if (tile.payload === 'reference') references.push(tile);
+      else if (tile.payload === 'gene') genes.push(tile);
     }
 
     const bandHeight = bandHeightFor(track.kind, policy);
@@ -216,6 +231,12 @@ export function createRenderScheduler(canvas: HTMLCanvasElement): RenderSchedule
       const renderer = ensureReference(track.id);
       for (let i = 0; i < references.length; i++) {
         renderer.draw(references[i]!, v, yTopPx, bandHeight);
+      }
+    }
+    if (genes.length > 0) {
+      const renderer = ensureGene(track.id);
+      for (let i = 0; i < genes.length; i++) {
+        renderer.draw(genes[i]!, v, yTopPx, bandHeight);
       }
     }
   };
@@ -263,10 +284,12 @@ export function createRenderScheduler(canvas: HTMLCanvasElement): RenderSchedule
     for (const r of coverageRenderers.values()) try { r.dispose(); } catch { /* ignore */ }
     for (const r of bigwigRenderers.values()) try { r.dispose(); } catch { /* ignore */ }
     for (const r of referenceRenderers.values()) try { r.dispose(); } catch { /* ignore */ }
+    for (const r of geneRenderers.values()) try { r.dispose(); } catch { /* ignore */ }
     pileupRenderers.clear();
     coverageRenderers.clear();
     bigwigRenderers.clear();
     referenceRenderers.clear();
+    geneRenderers.clear();
     dirty = true;
   });
 
@@ -281,10 +304,12 @@ export function createRenderScheduler(canvas: HTMLCanvasElement): RenderSchedule
     for (const r of coverageRenderers.values()) try { r.dispose(); } catch { /* ignore */ }
     for (const r of bigwigRenderers.values()) try { r.dispose(); } catch { /* ignore */ }
     for (const r of referenceRenderers.values()) try { r.dispose(); } catch { /* ignore */ }
+    for (const r of geneRenderers.values()) try { r.dispose(); } catch { /* ignore */ }
     pileupRenderers.clear();
     coverageRenderers.clear();
     bigwigRenderers.clear();
     referenceRenderers.clear();
+    geneRenderers.clear();
     ctx.dispose();
   };
 

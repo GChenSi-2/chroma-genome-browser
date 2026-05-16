@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { adaptContextRange, defaultContextRange } from '~state/context-range';
 import type { Locus } from '~state/types';
 
-const chr20Full = defaultContextRange('chr20'); // 0..63_025_520
+const chr20Full = defaultContextRange('chr20'); // 0..64_444_167
 
 const vp = (start: bigint, end: bigint, chrom: string = 'chr20') => ({
   chrom,
@@ -19,26 +19,26 @@ describe('adaptContextRange', () => {
   });
 
   it('re-fits when the selection would be < 2 % of the bar', () => {
-    // 10 kb viewport in a 60 Mb context = 0.017 % — too narrow to grab.
+    // 10 kb viewport in a 60 Mb context = 0.017 %  Etoo narrow to grab.
     const v = vp(10_000_000n, 10_010_000n);
     const next = adaptContextRange(v, chr20Full, chr20Full);
     expect(next).not.toBeNull();
     expect(next!.chrom).toBe('chr20');
-    // 10 kb × FIT_RATIO (10) = 100 kb context, centred on 10,005,000.
+    // 10 kb ÁEFIT_RATIO (10) = 100 kb context, centred on 10,005,000.
     expect(Number(next!.end - next!.start)).toBe(100_000);
     const mid = (next!.start + next!.end) / 2n;
     expect(Number(mid - 10_005_000n)).toBeLessThanOrEqual(1);
   });
 
   it('re-fits when the selection would cover > 70 % of the bar', () => {
-    // 9 Mb viewport, current ctx 10 Mb → fraction = 0.9 → too wide.
+    // 9 Mb viewport, current ctx 10 Mb ↁEfraction = 0.9 ↁEtoo wide.
     const ctx: Locus = { chrom: 'chr20', start: 10_000_000n, end: 20_000_000n };
     const v = vp(10_500_000n, 19_500_000n);
     const next = adaptContextRange(v, ctx, chr20Full);
     expect(next).not.toBeNull();
-    // 9 Mb × 10 = 90 Mb requested, but chr20 only has 63 Mb → snaps to full.
+    // 9 Mb ÁE10 = 90 Mb requested, but chr20 only has 63 Mb ↁEsnaps to full.
     expect(next!.start).toBe(0n);
-    expect(next!.end).toBe(63_025_520n);
+    expect(next!.end).toBe(64_444_167n);
   });
 
   it('re-fits when viewport scrolled outside ctx (drag/jump far away)', () => {
@@ -52,13 +52,13 @@ describe('adaptContextRange', () => {
   });
 
   it('snaps to full chrom when target context exceeds chrom length', () => {
-    // 10 Mb viewport × 10 = 100 Mb context, but chr20 is only 63 Mb.
+    // 10 Mb viewport ÁE10 = 100 Mb context, but chr20 is only 63 Mb.
     const ctx: Locus = { chrom: 'chr20', start: 0n, end: 1_000_000n };
     const v = vp(20_000_000n, 30_000_000n);
     const next = adaptContextRange(v, ctx, chr20Full);
     expect(next).not.toBeNull();
     expect(next!.start).toBe(0n);
-    expect(next!.end).toBe(63_025_520n);
+    expect(next!.end).toBe(64_444_167n);
   });
 
   it('clamps the re-fit context against the chromosome start', () => {
@@ -70,10 +70,12 @@ describe('adaptContextRange', () => {
   });
 
   it('clamps the re-fit context against the chromosome end', () => {
-    const v = vp(63_000_000n, 63_010_000n);
+    // Viewport in the last 50 kb of chr20 (10 kb wide) -> target context is
+    // 100 kb but bumps against the chrom ceiling.
+    const v = vp(64_400_000n, 64_410_000n);
     const next = adaptContextRange(v, chr20Full, chr20Full);
     expect(next).not.toBeNull();
-    expect(next!.end).toBe(63_025_520n);
+    expect(next!.end).toBe(64_444_167n);
   });
 
   it('returns full chrom when chrom mismatches', () => {
@@ -83,7 +85,7 @@ describe('adaptContextRange', () => {
     expect(next).not.toBeNull();
     expect(next!.chrom).toBe('chr20');
     expect(next!.start).toBe(0n);
-    expect(next!.end).toBe(63_025_520n);
+    expect(next!.end).toBe(64_444_167n);
   });
 
   it('is a no-op for zero-span viewport (defensive)', () => {

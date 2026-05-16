@@ -22,3 +22,9 @@ export {
   decodePackedBases,
   type ReferenceRenderer,
 } from './reference';
+
+export {
+  createGeneRenderer,
+  assignGeneRows,
+  type GeneRenderer,
+} from './gene';

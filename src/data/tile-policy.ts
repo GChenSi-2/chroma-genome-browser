@@ -56,14 +56,32 @@ const BIGWIG_LADDER: ReadonlyArray<LadderEntry> = BAM_LADDER;
  */
 const REFERENCE_POLICY: TilePolicy = { binSize: 65_536, tileWidthBp: 65_536 };
 
+/**
+ * Gene annotation — single tile per Mb. binSize is a marker (the BIN_SIZES
+ * ladder doesn't really apply to annotations), tileWidthBp drives the
+ * Ensembl REST query range. 1 Mb is comfortable for the API (~50–100
+ * features in a typical region) and gives generous cache reuse on pan.
+ *
+ * At wider zoom-outs we coarsen to 4 Mb tiles so a chrom-overview only
+ * needs a handful of API calls. At chrom-overview tier (≥ 10 Mb viewport)
+ * we still query 4 Mb chunks rather than 33 Mb because Ensembl truncates
+ * very wide overlap responses.
+ */
+const GENE_LADDER: ReadonlyArray<LadderEntry> = [
+  { maxSpan: 50_000, binSize: 1024, tileWidthBp: 65_536 },
+  { maxSpan: 1_000_000, binSize: 8192, tileWidthBp: 1_048_576 },
+  { maxSpan: Number.POSITIVE_INFINITY, binSize: 65_536, tileWidthBp: 4_194_304 },
+];
+
 type PolicyFn = (spanBp: number) => TilePolicy;
 
 const POLICIES: Partial<Record<TrackKind, PolicyFn>> = {
   bam: (span) => fromLadder(BAM_LADDER, span),
   bigwig: (span) => fromLadder(BIGWIG_LADDER, span),
   reference: () => REFERENCE_POLICY,
-  // vcf / gene / bed: not yet scheduled — returning null leaves the cache
-  // empty for those kinds, and the render layer skips them silently.
+  gene: (span) => fromLadder(GENE_LADDER, span),
+  // vcf / bed: not yet scheduled — returning null leaves the cache empty
+  // for those kinds, and the render layer skips them silently.
 };
 
 function fromLadder(ladder: ReadonlyArray<LadderEntry>, spanBp: number): TilePolicy {

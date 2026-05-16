@@ -34,6 +34,7 @@ import { tracks } from '~state/tracks';
 import { viewport } from '~state/viewport';
 import type {
   BamTrack,
+  GeneTrack,
   ReferenceTrack,
   TileKey,
   Tile,
@@ -48,6 +49,7 @@ import {
   type TileCacheController,
 } from './tiles';
 import { policyFor, type TilePolicy } from './tile-policy';
+import { fetchEnsemblGenes } from './network/ensembl-genes';
 import { createWorkerPool, type WorkerPool } from './workers/pool';
 
 // Re-export policy helpers so existing imports (`bamBinSizeForSpan`, etc.)
@@ -78,15 +80,22 @@ function visibleTileIndexRange(
   return { first, last: lastInclusive };
 }
 
-/** Transform a viewport chrom name per the BAM track's chromMap rule. */
-function mapBamChrom(track: BamTrack, chrom: string): string {
-  if (track.chromMap === 'strip-chr') {
+/** Transform a viewport chrom name per a chrom-mapping rule. */
+function mapChrom(
+  chrom: string,
+  mode: 'strip-chr' | 'add-chr' | undefined,
+): string {
+  if (mode === 'strip-chr') {
     return chrom.startsWith('chr') ? chrom.slice(3) : chrom;
   }
-  if (track.chromMap === 'add-chr') {
+  if (mode === 'add-chr') {
     return chrom.startsWith('chr') ? chrom : 'chr' + chrom;
   }
   return chrom;
+}
+
+function mapBamChrom(track: BamTrack, chrom: string): string {
+  return mapChrom(chrom, track.chromMap);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -289,7 +298,45 @@ function dispatchTrack(
       );
       return;
     }
-    // vcf / gene / bed: policyFor returned null above.
+    case 'gene': {
+      const gTrack = track as GeneTrack;
+      const host = gTrack.ensemblHost ?? 'https://rest.ensembl.org';
+      const chromForApi = mapChrom(v.chrom, gTrack.chromMap);
+      runTileDispatch(
+        {
+          trackId: track.id,
+          policy,
+          cacheChrom: v.chrom,
+          range,
+          // Annotation fetch is small JSON, runs on main thread. Re-using
+          // the same `workerCall` slot keeps the dispatcher generic — the
+          // worker pool is just ignored for this kind.
+          workerCall: async (start, end, signal) => {
+            const features = await fetchEnsemblGenes({
+              host,
+              chrom: chromForApi,
+              start,
+              end,
+              signal,
+            });
+            return {
+              key: '',
+              trackId: '',
+              chrom: v.chrom,
+              binSize: policy.binSize,
+              binIndex: 0,
+              start: BigInt(start),
+              end: BigInt(end),
+              payload: 'gene',
+              features,
+            };
+          },
+        },
+        c,
+      );
+      return;
+    }
+    // vcf / bed: policyFor returned null above.
   }
 }
 

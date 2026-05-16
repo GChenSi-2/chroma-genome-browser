@@ -24,6 +24,12 @@ describe('policyFor', () => {
 
     ['reference', 10_000, 65_536, 65_536],
     ['reference', 1_000_000, 65_536, 65_536],
+
+    // Gene ladder
+    ['gene', 10_000, 1024, 65_536],
+    ['gene', 50_000, 1024, 65_536],
+    ['gene', 500_000, 8192, 1_048_576],
+    ['gene', 5_000_000, 65_536, 4_194_304],
   ] as const)(
     'kind=%s span=%i → binSize=%i tileWidthBp=%i',
     (kind, span, binSize, tileWidthBp) => {
@@ -34,7 +40,7 @@ describe('policyFor', () => {
     },
   );
 
-  it.each(['vcf', 'gene', 'bed'] as const)(
+  it.each(['vcf', 'bed'] as const)(
     'returns null for unsupported kind %s',
     (kind) => {
       expect(policyFor(kind, 1000)).toBeNull();
@@ -42,7 +48,7 @@ describe('policyFor', () => {
   );
 
   it('every policy has tileWidthBp >= binSize and an integer ratio', () => {
-    for (const kind of ['bam', 'bigwig', 'reference'] as const) {
+    for (const kind of ['bam', 'bigwig', 'reference', 'gene'] as const) {
       for (const span of [1_000, 100_000, 1_000_000, 100_000_000]) {
         const p = policyFor(kind, span)!;
         expect(p.tileWidthBp).toBeGreaterThanOrEqual(p.binSize);
