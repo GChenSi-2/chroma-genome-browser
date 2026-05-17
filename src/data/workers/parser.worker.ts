@@ -27,6 +27,7 @@ import * as Comlink from 'comlink';
 import { BamFile } from '@gmod/bam';
 import { BigWig } from '@gmod/bbi';
 import { IndexedFasta } from '@gmod/indexedfasta';
+import { CachedBaiFilehandle } from './cached-bai-filehandle';
 import type {
   CoverageTile,
   ReadTile,
@@ -95,7 +96,15 @@ function getBamFile(bamUrl: string, baiUrl: string): BamFile {
   const key = `${bamUrl}#${baiUrl}`;
   let f = bamCache.get(key);
   if (!f) {
-    f = new BamFile({ bamUrl, baiUrl });
+    // Pass a custom filehandle for the BAI so its bytes get cached in
+    // IndexedDB on first fetch. Session-2+ first nav skips the ~3-4 s
+    // BAI HTTP fetch (the BAI parse inside @gmod/bam still runs).
+    type BamCtorArg = ConstructorParameters<typeof BamFile>[0];
+    type BaiHandle = NonNullable<BamCtorArg['baiFilehandle']>;
+    f = new BamFile({
+      bamUrl,
+      baiFilehandle: new CachedBaiFilehandle(baiUrl) as unknown as BaiHandle,
+    });
     bamCache.set(key, f);
   }
   return f;

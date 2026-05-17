@@ -28,13 +28,19 @@ interface FakeRecord {
 }
 
 let mockRecords: FakeRecord[] = [];
-let lastBamFileArgs: { bamUrl?: string; baiUrl?: string } | undefined;
+let lastBamFileArgs:
+  | { bamUrl?: string; baiUrl?: string; baiFilehandle?: unknown }
+  | undefined;
 /** Delay in ms applied inside getRecordsForRange — used by abort tests. */
 let mockFetchDelayMs = 0;
 
 vi.mock('@gmod/bam', () => {
   class FakeBamFile {
-    constructor(args: { bamUrl?: string; baiUrl?: string }) {
+    constructor(args: {
+      bamUrl?: string;
+      baiUrl?: string;
+      baiFilehandle?: unknown;
+    }) {
       lastBamFileArgs = args;
     }
     async getHeader(): Promise<unknown[]> {
@@ -152,11 +158,13 @@ describe('parser.worker parseBamTile — read tile path (binSize < 8192)', () =>
     expect(result.flags).toBeInstanceOf(Uint16Array);
     expect(result.mapq).toBeInstanceOf(Uint8Array);
 
-    // Forwarded to the BamFile constructor
-    expect(lastBamFileArgs).toEqual({
-      bamUrl: BASE_REQ.url,
-      baiUrl: BASE_REQ.indexUrl,
-    });
+    // Forwarded to the BamFile constructor. The BAI now goes through a
+    // CachedBaiFilehandle (IndexedDB-backed binary cache) instead of a
+    // raw URL string, so we check the bamUrl + that *some* filehandle
+    // was wired up.
+    expect(lastBamFileArgs?.bamUrl).toBe(BASE_REQ.url);
+    expect(lastBamFileArgs?.baiUrl).toBeUndefined();
+    expect(lastBamFileArgs?.baiFilehandle).toBeDefined();
   });
 
   it('caps the read tile at 100,000 records (first N by start order)', async () => {
