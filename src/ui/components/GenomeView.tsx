@@ -4,7 +4,7 @@ import { tracks } from '~state/tracks';
 import { tileCache } from '~state/tile-cache';
 import { contextRange } from '~state/context-range';
 import { panBpWithin } from '~state/viewport-actions';
-import { setHoveredAnnotation } from '~state/hover';
+import { setHoveredAnnotation, setPinnedAnnotation } from '~state/hover';
 import { createRenderScheduler, type RenderScheduler } from '~render/scheduler';
 import { hitTestGene } from '~render/hit-test/gene-hit-test';
 import { AnnotationTooltip } from './AnnotationTooltip';
@@ -36,6 +36,11 @@ const WHEEL_PAN_FACTOR = 0.001;
  *  fast pan) shouldn't flash the shimmer — the stale-while-revalidate
  *  rendering already covers the visual gap. */
 const SKELETON_DEBOUNCE_MS = 200;
+/** Pixel-movement budget below which a pointerdown→pointerup pair counts
+ *  as a click (for click-to-pin); above, it's a drag and the pin is
+ *  preserved as-is. Matches the threshold the range-bar interaction
+ *  composable uses. */
+const CLICK_DRAG_PX = 4;
 
 export function GenomeView() {
   let canvasRef: HTMLCanvasElement | undefined;
@@ -53,6 +58,37 @@ export function GenomeView() {
 
   function handlePointerLeave(): void {
     setHoveredAnnotation(null);
+  }
+
+  // Click-to-pin state machine: a pointerdown remembers the starting
+  // coords; pointerup with movement <= CLICK_DRAG_PX is treated as a
+  // click and pins (or clears) the inspector. Drags pass through.
+  let pointerDownX = 0;
+  let pointerDownY = 0;
+  let pointerDownActive = false;
+
+  function handlePointerDown(e: PointerEvent): void {
+    if (e.button !== 0) return; // primary only
+    pointerDownX = e.clientX;
+    pointerDownY = e.clientY;
+    pointerDownActive = true;
+  }
+
+  function handlePointerUp(e: PointerEvent): void {
+    if (!pointerDownActive) return;
+    pointerDownActive = false;
+    const dx = Math.abs(e.clientX - pointerDownX);
+    const dy = Math.abs(e.clientY - pointerDownY);
+    if (dx + dy > CLICK_DRAG_PX) return; // it was a drag, don't change pin
+
+    // Hit-test at the release point — use the same logic as hover.
+    if (!canvasRef) return;
+    const rect = canvasRef.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const hit = hitTestGene({ px, py }, viewport(), tracks(), tileCache());
+    // Hit something → pin it. Empty canvas → clear any existing pin.
+    setPinnedAnnotation(hit);
   }
 
   function handleWheel(e: WheelEvent): void {
@@ -90,13 +126,18 @@ export function GenomeView() {
     canvasRef.addEventListener('wheel', handleWheel, { passive: false });
     canvasRef.addEventListener('pointermove', handlePointerMove);
     canvasRef.addEventListener('pointerleave', handlePointerLeave);
+    canvasRef.addEventListener('pointerdown', handlePointerDown);
+    canvasRef.addEventListener('pointerup', handlePointerUp);
 
     onCleanup(() => {
       ro.disconnect();
       canvasRef?.removeEventListener('wheel', handleWheel);
       canvasRef?.removeEventListener('pointermove', handlePointerMove);
       canvasRef?.removeEventListener('pointerleave', handlePointerLeave);
+      canvasRef?.removeEventListener('pointerdown', handlePointerDown);
+      canvasRef?.removeEventListener('pointerup', handlePointerUp);
       setHoveredAnnotation(null);
+      setPinnedAnnotation(null);
       scheduler?.dispose();
       scheduler = undefined;
     });

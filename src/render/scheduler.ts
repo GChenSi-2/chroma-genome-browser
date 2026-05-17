@@ -25,7 +25,7 @@ import { createEffect, onCleanup } from 'solid-js';
 import { tracks } from '~state/tracks';
 import { tileCache } from '~state/tile-cache';
 import { viewport } from '~state/viewport';
-import { hoveredAnnotation } from '~state/hover';
+import { hoveredAnnotation, pinnedAnnotation } from '~state/hover';
 import { policyFor, type TilePolicy } from '~data/tile-policy';
 import { createGLContext, type GLContext } from '~render/webgl';
 import {
@@ -404,16 +404,19 @@ export function createRenderScheduler(
       yOffsetPx += height + TRACK_GAP_PX;
     }
 
-    // Hover highlight — one global hovered feature; drawn last so it sits
-    // above both the WebGL geometry and the gene-name labels.
+    // Selection / hover highlight — pinned wins over hover (the user's
+    // anchored choice always shows; hover is transient). Pinned uses a
+    // slightly thicker stroke so the user can tell they're "locked in".
     if (haveLabels && labelCtx) {
+      const pin = pinnedAnnotation();
       const hover = hoveredAnnotation();
-      if (hover) {
-        const r = hover.rectPx;
+      const active = pin ?? hover;
+      if (active) {
+        const r = active.rectPx;
         labelCtx.save();
         labelCtx.strokeStyle = HOVER_STROKE_STYLE;
-        labelCtx.lineWidth = HOVER_STROKE_WIDTH_PX;
-        // 0.5-px offset aligns the 1.5-px stroke to the pixel grid.
+        labelCtx.lineWidth = pin ? HOVER_STROKE_WIDTH_PX + 0.5 : HOVER_STROKE_WIDTH_PX;
+        // 0.5-px offset aligns the stroke to the pixel grid.
         labelCtx.strokeRect(r.left + 0.5, r.top + 0.5, Math.max(1, r.width - 1), Math.max(1, r.height - 1));
         labelCtx.restore();
       }
@@ -427,6 +430,7 @@ export function createRenderScheduler(
     tileCache();
     tracks();
     hoveredAnnotation();
+    pinnedAnnotation();
     dirty = true;
   });
 

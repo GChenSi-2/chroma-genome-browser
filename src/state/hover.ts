@@ -1,9 +1,15 @@
 /**
- * Hovered annotation — the feature currently under the pointer in the
- * genome view. Tooltip and the scheduler's hover-highlight pass both
- * subscribe to this signal. Null when nothing is hovered.
+ * Annotation selection state — two coexisting signals:
  *
- * The hit-test runs on pointer-move in `GenomeView` and writes here;
+ *   `hoveredAnnotation`  Transient. Tracks pointer-move. Cleared on
+ *                        pointer-leave. Drives the live tooltip + outline.
+ *   `pinnedAnnotation`   Sticky. Set by click. Cleared by Esc / click on
+ *                        empty canvas / explicit close button.
+ *
+ * The tooltip prefers `pinned` over `hovered` so a user who clicked a
+ * gene can pan / zoom freely without losing the inspector pane.
+ *
+ * The hit-test runs on pointer events in `GenomeView` and writes here;
  * downstream UI / render layers stay decoupled from event timing.
  */
 
@@ -23,5 +29,12 @@ export interface HoveredAnnotation {
 }
 
 const [hovered, setHovered] = createSignal<HoveredAnnotation | null>(null);
+const [pinned, setPinned] = createSignal<HoveredAnnotation | null>(null);
 
-export { hovered as hoveredAnnotation, setHovered as setHoveredAnnotation };
+export {
+  hovered as hoveredAnnotation,
+  setHovered as setHoveredAnnotation,
+  pinned as pinnedAnnotation,
+  setPinned as setPinnedAnnotation,
+};
+
