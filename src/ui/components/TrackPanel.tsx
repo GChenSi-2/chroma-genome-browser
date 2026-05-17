@@ -11,6 +11,8 @@ import Eye from 'lucide-solid/icons/eye';
 import EyeOff from 'lucide-solid/icons/eye-off';
 import Ellipsis from 'lucide-solid/icons/ellipsis';
 import Plus from 'lucide-solid/icons/plus';
+import { AddTrackDialog } from './AddTrackDialog';
+import { revokeBlobUrlsFor } from './blob-url-helpers';
 
 /**
  * TrackPanel — left sidebar (220px) listing tracks.
@@ -113,71 +115,17 @@ function KindIcon(props: KindIconProps) {
   return <SquareIcon size={size} />;
 }
 
-/** Validate a parsed JSON value as a TrackConfig. Mirrors url-sync rules. */
-const TRACK_KINDS: ReadonlySet<TrackKind> = new Set<TrackKind>([
-  'reference',
-  'bam',
-  'bigwig',
-  'vcf',
-  'gene',
-  'bed',
-]);
-
-function isTrackConfig(value: unknown): value is TrackConfig {
-  if (typeof value !== 'object' || value === null) return false;
-  const obj = value as Record<string, unknown>;
-  return (
-    typeof obj['id'] === 'string' &&
-    typeof obj['kind'] === 'string' &&
-    TRACK_KINDS.has(obj['kind'] as TrackKind) &&
-    typeof obj['label'] === 'string' &&
-    typeof obj['url'] === 'string' &&
-    typeof obj['visible'] === 'boolean'
-  );
-}
-
-function promptForTrackConfig(): TrackConfig | null {
-  if (typeof window === 'undefined') return null;
-  const raw = window.prompt(
-    'Paste a track JSON config (id, kind, label, url, visible, ...)',
-  );
-  if (raw === null) return null;
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch (err) {
-    window.alert(`Invalid JSON: ${(err as Error).message}`);
-    return null;
-  }
-  if (!isTrackConfig(parsed)) {
-    window.alert(
-      'Track config must have string id/kind/label/url and boolean visible. kind ∈ reference|bam|bigwig|vcf|gene|bed.',
-    );
-    return null;
-  }
-  return parsed;
-}
-
 function toggleVisibility(id: string): void {
   setTracks((prev) => prev.map((t) => (t.id === id ? { ...t, visible: !t.visible } : t)));
 }
 
 function removeTrack(id: string): void {
-  setTracks((prev) => prev.filter((t) => t.id !== id));
-}
-
-function addTrack(): void {
-  const cfg = promptForTrackConfig();
-  if (cfg === null) return;
-  setTracks((prev) => {
-    if (prev.some((t) => t.id === cfg.id)) {
-      window.alert(`Track id "${cfg.id}" already exists.`);
-      return prev;
-    }
-    return [...prev, cfg];
-  });
+  // Revoke any blob: URLs the track owns BEFORE dropping it from the
+  // signal, otherwise the File data lingers in memory until the document
+  // goes away.
+  const t = tracks().find((x) => x.id === id);
+  if (t) revokeBlobUrlsFor(t);
+  setTracks((prev) => prev.filter((x) => x.id !== id));
 }
 
 interface RowProps {
@@ -274,6 +222,7 @@ function TrackRow(props: RowProps) {
 
 export function TrackPanel() {
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
+  const [dialogOpen, setDialogOpen] = createSignal(false);
 
   return (
     <aside class="chroma-track-panel" aria-label="Tracks">
@@ -298,12 +247,13 @@ export function TrackPanel() {
         <button
           type="button"
           class="chroma-track-panel-add"
-          onClick={addTrack}
+          onClick={() => setDialogOpen(true)}
         >
           <Plus size={14} />
           <span>Add track</span>
         </button>
       </footer>
+      <AddTrackDialog open={dialogOpen()} onClose={() => setDialogOpen(false)} />
     </aside>
   );
 }

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { startUrlSync } from '~state/url-sync';
 import { viewport, setViewport, DEFAULT_VIEWPORT } from '~state/viewport';
 import { tracks, setTracks } from '~state/tracks';
-import type { TrackConfig } from '~state/types';
+import type { BamTrack, BigWigTrack, TrackConfig } from '~state/types';
 
 /**
  * url-sync tests run under happy-dom (vitest config default), where
@@ -219,6 +219,57 @@ describe('startUrlSync — hashchange (back/forward)', () => {
     history.replaceState(null, '', '/#not-a-locus');
     window.dispatchEvent(new Event('hashchange'));
     expect(viewport()).toEqual(before);
+  });
+});
+
+describe('startUrlSync — blob-backed tracks', () => {
+  it('omits blob: tracks from the ?t= query (not shareable)', () => {
+    vi.useFakeTimers();
+    disposer = startUrlSync();
+
+    const remote: BigWigTrack = {
+      id: 'remote',
+      kind: 'bigwig',
+      label: 'Remote',
+      url: 'https://example.com/x.bw',
+      visible: true,
+    };
+    const local: BamTrack = {
+      id: 'local',
+      kind: 'bam',
+      label: 'Local',
+      url: 'blob:http://localhost/abc',
+      indexUrl: 'blob:http://localhost/abc.bai',
+      visible: true,
+    };
+    setTracks([remote, local]);
+    vi.advanceTimersByTime(500);
+
+    // Only the remote track should be encoded in the query string.
+    const qs = window.location.search;
+    expect(qs).toContain('t=');
+    const t = qs.match(/t=([^&]+)/)![1]!;
+    const decoded = JSON.parse(atob(decodeURIComponent(t)));
+    expect(Array.isArray(decoded)).toBe(true);
+    expect(decoded).toHaveLength(1);
+    expect(decoded[0].id).toBe('remote');
+  });
+
+  it('omits a track if EITHER the primary OR the index URL is blob:', () => {
+    vi.useFakeTimers();
+    disposer = startUrlSync();
+    const mixed: BamTrack = {
+      id: 'mixed',
+      kind: 'bam',
+      label: 'Mixed',
+      url: 'https://example.com/x.bam',
+      indexUrl: 'blob:http://localhost/index-only-local',
+      visible: true,
+    };
+    setTracks([mixed]);
+    vi.advanceTimersByTime(500);
+    // Empty tracks → no t= param at all.
+    expect(window.location.search).not.toContain('t=');
   });
 });
 

@@ -677,6 +677,172 @@
   margin-top: 2px;
 }
 
+/* ─── Add-track modal ─────────────────────────────────────────────────
+   Centered overlay for the "Add track" flow. Backdrop is a soft scrim,
+   not a hard black — keeps the underlying track band recognisable.
+   Esc closes; click on backdrop closes; click inside dialog doesn't.
+   ───────────────────────────────────────────────────────────────────── */
+
+.chroma-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(15, 15, 17, 0.32);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Subtle entry animation — no slide / scale, just a fade so it doesn't
+     feel like a UI gimmick. */
+  animation: chroma-modal-fade 120ms ease-out;
+}
+
+@keyframes chroma-modal-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.chroma-modal {
+  background: var(--surface-0);
+  color: var(--ink-primary);
+  border: 1px solid var(--surface-3);
+  border-radius: 6px;
+  padding: 20px 22px;
+  width: min(440px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.06),
+    0 10px 32px rgba(0, 0, 0, 0.12);
+  font-family: var(--font-ui);
+}
+
+.chroma-modal-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 16px 0;
+  color: var(--ink-primary);
+}
+
+.chroma-modal-field {
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chroma-modal-field > label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ink-secondary);
+  letter-spacing: 0.02em;
+}
+
+.chroma-modal-field > input[type="text"],
+.chroma-modal-field > input[type="url"],
+.chroma-modal-field > select {
+  width: 100%;
+  padding: 6px 8px;
+  font: 12px / 1.4 var(--font-ui);
+  background: var(--surface-1);
+  border: 1px solid var(--surface-3);
+  border-radius: 4px;
+  color: var(--ink-primary);
+  outline: none;
+}
+
+.chroma-modal-field > input[type="text"]:focus,
+.chroma-modal-field > input[type="url"]:focus,
+.chroma-modal-field > select:focus {
+  border-color: var(--accent);
+}
+
+.chroma-modal-field > input[type="file"] {
+  font: 11px / 1.4 var(--font-ui);
+  color: var(--ink-secondary);
+}
+
+.chroma-modal-hint {
+  font: 10px / 1.4 var(--font-mono);
+  color: var(--ink-tertiary);
+  margin-top: 2px;
+}
+
+.chroma-modal-segment {
+  display: inline-flex;
+  border: 1px solid var(--surface-3);
+  border-radius: 4px;
+  overflow: hidden;
+  width: fit-content;
+}
+
+.chroma-modal-segment-btn {
+  background: var(--surface-0);
+  border: none;
+  padding: 6px 12px;
+  font: 11px / 1.4 var(--font-ui);
+  color: var(--ink-secondary);
+  cursor: pointer;
+}
+
+.chroma-modal-segment-btn + .chroma-modal-segment-btn {
+  border-left: 1px solid var(--surface-3);
+}
+
+.chroma-modal-segment-btn:hover {
+  background: var(--surface-2);
+}
+
+.chroma-modal-segment-btn--active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.chroma-modal-segment-btn--active:hover {
+  background: var(--accent-soft);
+}
+
+.chroma-modal-error {
+  color: var(--danger);
+  font: 11px / 1.4 var(--font-ui);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  padding: 6px 8px;
+  border-radius: 4px;
+  margin-bottom: 12px;
+}
+
+.chroma-modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.chroma-modal-btn {
+  padding: 6px 14px;
+  font: 12px / 1.4 var(--font-ui);
+  font-weight: 500;
+  background: var(--surface-0);
+  border: 1px solid var(--surface-3);
+  color: var(--ink-primary);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.chroma-modal-btn:hover {
+  background: var(--surface-1);
+}
+
+.chroma-modal-btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.chroma-modal-btn--primary:hover {
+  background: color-mix(in srgb, var(--accent) 90%, black);
+}
+
 
 
 /* -------------------------------------------------------------------------

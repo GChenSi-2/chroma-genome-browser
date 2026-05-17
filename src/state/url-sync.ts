@@ -45,6 +45,17 @@ function isTrackConfig(value: unknown): value is TrackConfig {
   return true;
 }
 
+/** True iff any of the track's referenced URLs is a `blob:` URL. Such
+ *  tracks are local-file-backed via URL.createObjectURL and therefore
+ *  not shareable across documents — `url-sync` skips them when writing
+ *  the `?t=…` query. */
+function isBlobBacked(t: TrackConfig): boolean {
+  if (t.url.startsWith('blob:')) return true;
+  if (t.kind === 'bam' && t.indexUrl?.startsWith('blob:')) return true;
+  if (t.kind === 'reference' && t.faiUrl?.startsWith('blob:')) return true;
+  return false;
+}
+
 function parseTracksFromQuery(search: string): ReadonlyArray<TrackConfig> | null {
   // Strip leading '?' if present.
   const qs = search.startsWith('?') ? search.slice(1) : search;
@@ -134,7 +145,11 @@ export function startUrlSync(): () => void {
   function writeUrl(): void {
     const v = viewport();
     const hash = '#' + formatLocus({ chrom: v.chrom, start: v.start, end: v.end });
-    const tList = tracks();
+    // Strip `blob:` tracks — they're document-scoped (created via
+    // URL.createObjectURL) so the URL string isn't valid for anyone but
+    // this tab in this session. Sharing the link with a blob: track
+    // baked in would dump an unloadable config on the recipient.
+    const tList = tracks().filter((t) => !isBlobBacked(t));
     const tracksQuery =
       tList.length > 0 ? `?t=${encodeURIComponent(btoa(JSON.stringify(tList)))}` : '';
     const next = `${tracksQuery}${hash}`;
