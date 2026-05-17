@@ -15,6 +15,7 @@
     "typecheck": "tsc -b --noEmit"
   },
   "dependencies": {
+    "@chenglou/pretext": "0.0.7",
     "@gmod/bam": "^7.1.21",
     "@gmod/bbi": "^9.0.9",
     "@gmod/indexedfasta": "^5.0.5",

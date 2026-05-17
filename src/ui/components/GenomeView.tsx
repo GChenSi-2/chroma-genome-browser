@@ -31,6 +31,7 @@ const WHEEL_PAN_FACTOR = 0.001;
 
 export function GenomeView() {
   let canvasRef: HTMLCanvasElement | undefined;
+  let labelCanvasRef: HTMLCanvasElement | undefined;
   let scheduler: RenderScheduler | undefined;
 
   function handleWheel(e: WheelEvent): void {
@@ -49,7 +50,7 @@ export function GenomeView() {
 
   onMount(() => {
     if (!canvasRef) return;
-    scheduler = createRenderScheduler(canvasRef);
+    scheduler = createRenderScheduler(canvasRef, { labels: labelCanvasRef ?? null });
 
     const ro = new ResizeObserver((entries) => {
       const entry = entries[0];
@@ -93,6 +94,11 @@ export function GenomeView() {
   return (
     <div class="chroma-genome-view">
       <canvas ref={canvasRef} class="chroma-canvas" />
+      <canvas
+        ref={(el) => { labelCanvasRef = el; }}
+        class="chroma-canvas chroma-canvas-labels"
+        aria-hidden="true"
+      />
       <Show when={isLoading()}>
         <div
           class="chroma-canvas-skeleton"

@@ -205,6 +205,16 @@
   background: var(--surface-1);
 }
 
+/* Canvas2D label overlay — same pixel grid as the WebGL canvas, stacked
+   on top, never intercepts pointer events. The scheduler owns its size
+   and DPR transform; this rule only handles positioning + interactivity. */
+.chroma-canvas-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: transparent;
+}
+
 .chroma-track-status {
   display: grid;
   gap: var(--space-1);

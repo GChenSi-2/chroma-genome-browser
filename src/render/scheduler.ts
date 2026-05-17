@@ -41,6 +41,7 @@ import {
   type ReferenceRenderer,
   type GeneRenderer,
 } from '~render/tracks-render';
+import { drawGeneLabels } from '~render/labels/gene-labels';
 import type {
   CoverageTile,
   GeneTile,
@@ -60,6 +61,17 @@ export interface RenderScheduler {
   lastFrameMs(): number;
   dispose(): void;
 }
+
+export interface RenderSchedulerOverlays {
+  /** Canvas2D overlay receiving annotation labels (gene names, etc.).
+   *  `null` disables the labels pass entirely — useful for tests where
+   *  no second canvas is mounted. */
+  labels: HTMLCanvasElement | null;
+}
+
+/** Label colour. Hardcoded to --ink-primary for now; theme-reactive
+ *  resolution is a follow-up. */
+const LABEL_FILL_STYLE = '#18181b';
 
 // ── Per-kind layout — DESIGN_SYSTEM §5 track heights ──────────────────────
 const TRACK_HEIGHT: Record<TrackKind, number> = {
@@ -126,8 +138,13 @@ function collectTilesForTrack(
   return out;
 }
 
-export function createRenderScheduler(canvas: HTMLCanvasElement): RenderScheduler {
+export function createRenderScheduler(
+  canvas: HTMLCanvasElement,
+  overlays: RenderSchedulerOverlays = { labels: null },
+): RenderScheduler {
   const ctx: GLContext = createGLContext({ canvas });
+  const labelCanvas = overlays.labels;
+  const labelCtx = labelCanvas ? labelCanvas.getContext('2d') : null;
   const pileupRenderers = new Map<string, PileupRenderer>();
   const coverageRenderers = new Map<string, CoverageRenderer>();
   const bigwigRenderers = new Map<string, BigWigRenderer>();
@@ -248,6 +265,24 @@ export function createRenderScheduler(canvas: HTMLCanvasElement): RenderSchedule
     }
   };
 
+  /** Resize the labels canvas to match the WebGL canvas's logical pixels
+   *  and reset its 2D transform to (dpr, 0, 0, dpr, 0, 0). The WebGL canvas
+   *  already does this in its own `ctx.resize()`; we mirror the math here
+   *  so the two stay perfectly co-located. */
+  const syncLabelsCanvas = (cssW: number, cssH: number): boolean => {
+    if (!labelCanvas || !labelCtx) return false;
+    const dpr = (typeof window !== 'undefined' ? window.devicePixelRatio : 1) || 1;
+    const needW = Math.max(1, Math.round(cssW * dpr));
+    const needH = Math.max(1, Math.round(cssH * dpr));
+    if (labelCanvas.width !== needW) labelCanvas.width = needW;
+    if (labelCanvas.height !== needH) labelCanvas.height = needH;
+    if (labelCanvas.style.width !== `${cssW}px`) labelCanvas.style.width = `${cssW}px`;
+    if (labelCanvas.style.height !== `${cssH}px`) labelCanvas.style.height = `${cssH}px`;
+    labelCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    labelCtx.clearRect(0, 0, cssW, cssH);
+    return true;
+  };
+
   const drawFrame = (): void => {
     frame = requestAnimationFrame(drawFrame);
     if (disposed) return;
@@ -265,13 +300,36 @@ export function createRenderScheduler(canvas: HTMLCanvasElement): RenderSchedule
     const trackList = tracks();
     const span = Number(v.end - v.start);
 
+    const haveLabels = syncLabelsCanvas(v.pxWidth, v.pxHeight);
+
     let yOffsetPx = TOP_PAD_PX;
     for (const track of trackList) {
       if (!track.visible) continue;
       drawTrack(track, snapshot, v, yOffsetPx);
+
+      const policy = policyFor(track.kind, span);
+
+      // Label pass — currently only the gene track has labels. The Canvas2D
+      // overlay sits above the WebGL canvas in the DOM, so labels paint on
+      // top of the geometry naturally.
+      if (haveLabels && labelCtx && track.kind === 'gene' && policy) {
+        const bandHeight = bandHeightFor(track.kind, policy);
+        const trackTiles = collectTilesForTrack(snapshot, track.id, v, policy);
+        for (const tile of trackTiles) {
+          if (tile.payload !== 'gene') continue;
+          drawGeneLabels({
+            ctx2d: labelCtx,
+            tile,
+            viewport: v,
+            yTopPx: yOffsetPx,
+            bandHeightPx: bandHeight,
+            fillStyle: LABEL_FILL_STYLE,
+          });
+        }
+      }
+
       // Advance by the actual rendered height of this band — must match what
       // drawTrack picks via bandHeightFor(), or tracks below would overlap.
-      const policy = policyFor(track.kind, span);
       const height = policy ? bandHeightFor(track.kind, policy) : TRACK_HEIGHT[track.kind];
       yOffsetPx += height + TRACK_GAP_PX;
     }
