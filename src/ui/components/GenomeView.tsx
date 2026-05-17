@@ -1,4 +1,4 @@
-import { Show, createMemo, onCleanup, onMount } from 'solid-js';
+import { Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { setViewport, viewport } from '~state/viewport';
 import { tracks } from '~state/tracks';
 import { tileCache } from '~state/tile-cache';
@@ -31,6 +31,11 @@ import { AnnotationTooltip } from './AnnotationTooltip';
  * janky for fine-grained trackpads.
  */
 const WHEEL_PAN_FACTOR = 0.001;
+/** Defer the skeleton overlay until loading has been continuously true for
+ *  this long. Sub-200 ms loading blips (e.g. crossing a tile boundary on a
+ *  fast pan) shouldn't flash the shimmer — the stale-while-revalidate
+ *  rendering already covers the visual gap. */
+const SKELETON_DEBOUNCE_MS = 200;
 
 export function GenomeView() {
   let canvasRef: HTMLCanvasElement | undefined;
@@ -112,6 +117,35 @@ export function GenomeView() {
     return false;
   });
 
+  // Debounced skeleton visibility. We only show the shimmer when loading
+  // has been continuously true for SKELETON_DEBOUNCE_MS. Pan-induced
+  // sub-200 ms blips don't flash the overlay; long fetches still do.
+  const [showSkeleton, setShowSkeleton] = createSignal(false);
+  let skeletonTimer: ReturnType<typeof setTimeout> | null = null;
+  createEffect(() => {
+    const loading = isLoading();
+    if (loading) {
+      if (skeletonTimer === null && !showSkeleton()) {
+        skeletonTimer = setTimeout(() => {
+          skeletonTimer = null;
+          setShowSkeleton(true);
+        }, SKELETON_DEBOUNCE_MS);
+      }
+    } else {
+      if (skeletonTimer !== null) {
+        clearTimeout(skeletonTimer);
+        skeletonTimer = null;
+      }
+      if (showSkeleton()) setShowSkeleton(false);
+    }
+  });
+  onCleanup(() => {
+    if (skeletonTimer !== null) {
+      clearTimeout(skeletonTimer);
+      skeletonTimer = null;
+    }
+  });
+
   return (
     <div class="chroma-genome-view">
       <canvas ref={canvasRef} class="chroma-canvas" />
@@ -120,7 +154,7 @@ export function GenomeView() {
         class="chroma-canvas chroma-canvas-labels"
         aria-hidden="true"
       />
-      <Show when={isLoading()}>
+      <Show when={showSkeleton()}>
         <div
           class="chroma-canvas-skeleton"
           aria-hidden="true"
