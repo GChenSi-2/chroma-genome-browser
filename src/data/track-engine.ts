@@ -255,6 +255,7 @@ function dispatchBamSingleFetch(
       start,
       end,
       binSize: policy.binSize,
+      ...(track.maxReads !== undefined ? { maxReads: track.maxReads } : {}),
     },
     controller.signal,
   )
@@ -322,6 +323,9 @@ function dispatchTrack(
                 start,
                 end,
                 binSize: policy.binSize,
+                ...((track as BamTrack).maxReads !== undefined
+                  ? { maxReads: (track as BamTrack).maxReads }
+                  : {}),
               },
               signal,
             ),

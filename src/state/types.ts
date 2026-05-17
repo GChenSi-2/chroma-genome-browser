@@ -63,6 +63,20 @@ export interface BamTrack extends TrackBase {
   /** Optional: per-track pileup row cap. Defaults to 200. */
   maxRows?: number;
   /**
+   * Optional cap on reads kept per tile (pileup tier only — coverage
+   * histograms are unaffected). When the worker fetches more reads than
+   * this number, it uniformly decimates the array so the kept reads still
+   * cover the full tile range (step = total/maxReads, indexes
+   * `floor(i*step)`). Use for high-coverage demo BAMs (e.g. 300x GIAB) so
+   * the renderer's pack + WebGL upload + pileup row-assignment don't
+   * scale with raw coverage. NOTE: the underlying `@gmod/bam` API does
+   * NOT support fetch-time truncation; this only reduces work AFTER the
+   * library returns the full read array, so the fetch+parse time itself
+   * is unchanged. See HANDOFF_NEXT for the carry-forward to actually
+   * short-circuit the fetch via `blocksForRange` + custom record parsing.
+   */
+  maxReads?: number;
+  /**
    * Map the viewport chrom name before sending it to the worker. 1000G
    * BAMs use bare "20"; hg38 BAMs use "chr20". Auto-prefix in locus-parser
    * means viewport.chrom usually carries "chr20" — `strip-chr` adapts to

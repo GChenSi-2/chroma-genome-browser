@@ -20,6 +20,9 @@ export interface ParseBamRequest {
   start: number;
   end: number;
   binSize: BinSize;
+  /** Pileup-tier read cap; see BamTrack.maxReads for semantics. Ignored at
+   *  coverage tier (binSize >= COVERAGE_BIN_THRESHOLD in parser.worker). */
+  maxReads?: number;
 }
 
 export interface ParseBigWigRequest {

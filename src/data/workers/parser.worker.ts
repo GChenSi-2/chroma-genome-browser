@@ -53,6 +53,25 @@ const selfOrUndefined: DedicatedWorkerGlobalScope | undefined =
 /** SoA cap — keeps a single tile bounded regardless of region density. */
 const MAX_READS = 100_000;
 
+/**
+ * Uniform decimation: pick every (n/want)-th element so the kept reads
+ * still span the full source range. Reads are sorted by start in BAM
+ * indices, so floor(i * step) preserves left→right ordering and gives an
+ * even visual coverage of the tile. Cheaper than reservoir sampling and
+ * deterministic across calls — important for cache reuse and snapshot
+ * tests.
+ */
+function decimateUniform<T>(items: T[], want: number): T[] {
+  const n = items.length;
+  if (want <= 0 || n <= want) return items;
+  const step = n / want;
+  const out: T[] = new Array(want);
+  for (let i = 0; i < want; i++) {
+    out[i] = items[Math.floor(i * step)]!;
+  }
+  return out;
+}
+
 /** Below this binSize, callers want per-read detail; above, a histogram. */
 const COVERAGE_BIN_THRESHOLD = 8192;
 
@@ -333,6 +352,13 @@ async function runBamParse(
   }
 
   if (abortWatcher.aborted()) throw abortError();
+
+  // Cap-at-N for pileup tier (high-coverage BAMs like GIAB 300×).
+  // Coverage tier intentionally bypasses the cap — its histogram depends
+  // on counting every read in the range.
+  if (req.binSize < COVERAGE_BIN_THRESHOLD && req.maxReads !== undefined && req.maxReads > 0) {
+    records = decimateUniform(records, req.maxReads);
+  }
 
   return req.binSize >= COVERAGE_BIN_THRESHOLD
     ? buildCoverageTile(records, req)
@@ -694,6 +720,10 @@ export type WorkerApi = typeof api;
  * public RPC surface.
  */
 export const __api = api;
+
+/** Test-only re-export of the uniform decimator. Real code reaches it
+ *  through the read-cap branch in `runBamParse`. */
+export const _decimateUniform = decimateUniform;
 
 if (selfOrUndefined) {
   Comlink.expose(api, selfOrUndefined as unknown as Comlink.Endpoint);

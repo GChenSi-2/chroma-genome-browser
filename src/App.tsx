@@ -92,6 +92,12 @@ const DEMO_BAM_HG38: BamTrack = {
   // fetch per 10 kb nav (per HANDOFF_NEXT carry-forward #1). Available in
   // the track panel for users who want it; default boot stays snappy.
   visible: false,
+  // 300× would produce ~18 k reads per 10 kb tile — visually unreadable in
+  // a pileup band with maxRows=200. Cap at 5 000 so the renderer's pack +
+  // WebGL upload + row assignment work against a bounded slice. Reads are
+  // uniformly decimated across the tile so coverage profile stays
+  // representative.
+  maxReads: 5_000,
 };
 
 /**
