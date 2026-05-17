@@ -25,8 +25,15 @@ import { createEffect, onCleanup } from 'solid-js';
 import { tracks } from '~state/tracks';
 import { tileCache } from '~state/tile-cache';
 import { viewport } from '~state/viewport';
+import { hoveredAnnotation } from '~state/hover';
 import { policyFor, type TilePolicy } from '~data/tile-policy';
 import { createGLContext, type GLContext } from '~render/webgl';
+import {
+  TOP_PAD_PX,
+  TRACK_GAP_PX,
+  TRACK_HEIGHT,
+  bandHeightFor,
+} from '~render/track-layout';
 import {
   createPileupRenderer,
   createCoverageRenderer,
@@ -53,7 +60,6 @@ import type {
   Tile,
   Viewport,
   TrackConfig,
-  TrackKind,
 } from '~state/types';
 
 export interface RenderScheduler {
@@ -72,34 +78,9 @@ export interface RenderSchedulerOverlays {
 /** Label colour. Hardcoded to --ink-primary for now; theme-reactive
  *  resolution is a follow-up. */
 const LABEL_FILL_STYLE = '#18181b';
-
-// ── Per-kind layout — DESIGN_SYSTEM §5 track heights ──────────────────────
-const TRACK_HEIGHT: Record<TrackKind, number> = {
-  reference: 20,
-  bam: 200, // pileup default; coverage tier shrinks via bandHeightFor() below
-  bigwig: 80,
-  vcf: 28,
-  gene: 90, // gene + multi-transcript stacks; ~5 rows of 18 px each
-  bed: 32,
-};
-/** BAM band height when the policy returns a coverage-tier binSize. */
-const BAM_COVERAGE_HEIGHT_PX = 60;
-const TRACK_GAP_PX = 8;
-const TOP_PAD_PX = 16;
-
-/**
- * Resolve the rendered band height for `(kind, policy)`. For BAM we shrink
- * the band from 200 → 60 once the policy crosses into coverage tier (binSize
- * >= 8192 → CoverageTile path) so a thin histogram doesn't fill the same
- * vertical space as a dense pileup. DESIGN_SYSTEM §5 spec'd coverage = 60
- * and pileup = 80–400 adaptive; we use a fixed 200 for pileup for now.
- */
-function bandHeightFor(kind: TrackKind, policy: TilePolicy): number {
-  if (kind === 'bam') {
-    return policy.binSize >= 8192 ? BAM_COVERAGE_HEIGHT_PX : TRACK_HEIGHT.bam;
-  }
-  return TRACK_HEIGHT[kind];
-}
+/** Hover highlight stroke colour. --accent #2563eb at full alpha. */
+const HOVER_STROKE_STYLE = '#2563eb';
+const HOVER_STROKE_WIDTH_PX = 1.5;
 
 // ── Colors from DESIGN_SYSTEM §2.2 ────────────────────────────────────────
 const COVERAGE_FILL: readonly [number, number, number] = [0.581, 0.643, 0.722]; // --cov-fill #94a3b8
@@ -334,6 +315,21 @@ export function createRenderScheduler(
       yOffsetPx += height + TRACK_GAP_PX;
     }
 
+    // Hover highlight — one global hovered feature; drawn last so it sits
+    // above both the WebGL geometry and the gene-name labels.
+    if (haveLabels && labelCtx) {
+      const hover = hoveredAnnotation();
+      if (hover) {
+        const r = hover.rectPx;
+        labelCtx.save();
+        labelCtx.strokeStyle = HOVER_STROKE_STYLE;
+        labelCtx.lineWidth = HOVER_STROKE_WIDTH_PX;
+        // 0.5-px offset aligns the 1.5-px stroke to the pixel grid.
+        labelCtx.strokeRect(r.left + 0.5, r.top + 0.5, Math.max(1, r.width - 1), Math.max(1, r.height - 1));
+        labelCtx.restore();
+      }
+    }
+
     lastMs = performance.now() - t0;
   };
 
@@ -341,6 +337,7 @@ export function createRenderScheduler(
     viewport();
     tileCache();
     tracks();
+    hoveredAnnotation();
     dirty = true;
   });
 

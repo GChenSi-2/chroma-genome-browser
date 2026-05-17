@@ -4,7 +4,10 @@ import { tracks } from '~state/tracks';
 import { tileCache } from '~state/tile-cache';
 import { contextRange } from '~state/context-range';
 import { panBpWithin } from '~state/viewport-actions';
+import { setHoveredAnnotation } from '~state/hover';
 import { createRenderScheduler, type RenderScheduler } from '~render/scheduler';
+import { hitTestGene } from '~render/hit-test/gene-hit-test';
+import { AnnotationTooltip } from './AnnotationTooltip';
 
 /**
  * GenomeView — mounts the WebGL canvas, owns the render scheduler, and
@@ -33,6 +36,19 @@ export function GenomeView() {
   let canvasRef: HTMLCanvasElement | undefined;
   let labelCanvasRef: HTMLCanvasElement | undefined;
   let scheduler: RenderScheduler | undefined;
+
+  function handlePointerMove(e: PointerEvent): void {
+    if (!canvasRef) return;
+    const rect = canvasRef.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const hit = hitTestGene({ px, py }, viewport(), tracks(), tileCache());
+    setHoveredAnnotation(hit);
+  }
+
+  function handlePointerLeave(): void {
+    setHoveredAnnotation(null);
+  }
 
   function handleWheel(e: WheelEvent): void {
     if (!e.shiftKey) return; // plain wheel → browser default
@@ -67,10 +83,15 @@ export function GenomeView() {
     // Solid's JSX onWheel binds as passive on some platforms, so attach
     // imperatively.
     canvasRef.addEventListener('wheel', handleWheel, { passive: false });
+    canvasRef.addEventListener('pointermove', handlePointerMove);
+    canvasRef.addEventListener('pointerleave', handlePointerLeave);
 
     onCleanup(() => {
       ro.disconnect();
       canvasRef?.removeEventListener('wheel', handleWheel);
+      canvasRef?.removeEventListener('pointermove', handlePointerMove);
+      canvasRef?.removeEventListener('pointerleave', handlePointerLeave);
+      setHoveredAnnotation(null);
       scheduler?.dispose();
       scheduler = undefined;
     });
@@ -106,6 +127,7 @@ export function GenomeView() {
           data-testid="canvas-skeleton"
         />
       </Show>
+      <AnnotationTooltip />
     </div>
   );
 }
