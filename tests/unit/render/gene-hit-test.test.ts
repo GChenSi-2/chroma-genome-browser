@@ -95,6 +95,7 @@ describe('hitTestGene', () => {
       makeSnapshot(tile),
     );
     expect(hit).not.toBeNull();
+    expect(hit!.kind).toBe('gene');
     expect(hit!.feature.id).toBe('ENSG_TP53');
     expect(hit!.gene.id).toBe('ENSG_TP53');
   });
@@ -110,6 +111,7 @@ describe('hitTestGene', () => {
       makeSnapshot(tile),
     );
     expect(hit).not.toBeNull();
+    expect(hit!.kind).toBe('gene');
     expect(hit!.feature.type).toBe('exon');
     // Tooltip still wants the gene info.
     expect(hit!.gene.id).toBe('ENSG_TP53');
@@ -126,6 +128,7 @@ describe('hitTestGene', () => {
       makeSnapshot(tile),
     );
     expect(hit).not.toBeNull();
+    expect(hit!.kind).toBe('gene');
     // Transcript box is (0.45, 0.55) of row → only a narrow vertical band
     // at the row's vertical centre. y=45 ≈ row centre → backbone hit.
     expect(hit!.feature.type === 'transcript' || hit!.feature.type === 'gene').toBe(true);
@@ -176,6 +179,7 @@ describe('hitTestGene', () => {
       makeSnapshot(tile),
     );
     expect(hit).not.toBeNull();
+    expect(hit!.kind).toBe('gene');
     expect(hit!.rectPx.width).toBeGreaterThanOrEqual(1);
   });
 });

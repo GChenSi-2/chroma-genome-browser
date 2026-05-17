@@ -26,6 +26,8 @@ import { computeTrackBands } from '~render/track-layout';
 import { assignGeneRows } from '~render/tracks-render/gene';
 
 export interface GeneHitResult {
+  /** Discriminator matches the HoveredItem union in `~state/hover`. */
+  kind: 'gene';
   trackId: string;
   feature: GeneFeature;
   /** Parent gene (or `feature` itself when it's already a gene). */
@@ -143,6 +145,7 @@ export function hitTestGene(
       const gene = findGeneIn(features, winner.feature);
 
       return {
+        kind: 'gene',
         trackId: band.trackId,
         feature: winner.feature,
         gene,

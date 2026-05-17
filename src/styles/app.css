@@ -760,6 +760,36 @@
   line-height: 1.5;
 }
 
+/* Variant tooltip extras — colour swatch + REF → ALT arrow + kind chip */
+
+.chroma-annotation-tooltip-variant-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  margin-right: 6px;
+  vertical-align: 1px;
+}
+
+.chroma-annotation-tooltip-arrow {
+  margin: 0 4px;
+  color: var(--ink-tertiary);
+  font-family: var(--font-mono);
+}
+
+.chroma-annotation-tooltip-variant-kind {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 4px;
+  background: var(--surface-2);
+  color: var(--ink-secondary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  border-radius: 2px;
+  vertical-align: 1px;
+}
+
 /* ─── Add-track modal ─────────────────────────────────────────────────
    Centered overlay for the "Add track" flow. Backdrop is a soft scrim,
    not a hard black — keeps the underlying track band recognisable.

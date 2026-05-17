@@ -106,13 +106,25 @@ const GENE_LADDER: ReadonlyArray<LadderEntry> = [
 
 type PolicyFn = (spanBp: number) => TilePolicy;
 
+/**
+ * VCF — same ladder shape as BigWig. Tile cardinality is small (variants
+ * are sparse vs reads) but tabix's chunk-fetch model wants comfortable
+ * tile widths so each query covers several BGZF blocks at once.
+ */
+const VCF_LADDER: ReadonlyArray<LadderEntry> = [
+  { maxSpan: 50_000, binSize: 1024, tileWidthBp: 32_768 },
+  { maxSpan: 1_000_000, binSize: 8192, tileWidthBp: 524_288 },
+  { maxSpan: 10_000_000, binSize: 65_536, tileWidthBp: 4_194_304 },
+  { maxSpan: Number.POSITIVE_INFINITY, binSize: 524_288, tileWidthBp: 33_554_432 },
+];
+
 const POLICIES: Partial<Record<TrackKind, PolicyFn>> = {
   bam: bamPolicy,
   bigwig: (span) => fromLadder(BIGWIG_LADDER, span),
   reference: () => REFERENCE_POLICY,
   gene: (span) => fromLadder(GENE_LADDER, span),
-  // vcf / bed: not yet scheduled — returning null leaves the cache empty
-  // for those kinds, and the render layer skips them silently.
+  vcf: (span) => fromLadder(VCF_LADDER, span),
+  // bed: not yet scheduled.
 };
 
 function fromLadder(ladder: ReadonlyArray<LadderEntry>, spanBp: number): TilePolicy {

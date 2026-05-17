@@ -4,9 +4,10 @@ import { tracks } from '~state/tracks';
 import { tileCache } from '~state/tile-cache';
 import { contextRange } from '~state/context-range';
 import { panBpWithin } from '~state/viewport-actions';
-import { setHoveredAnnotation, setPinnedAnnotation } from '~state/hover';
+import { setHoveredAnnotation, setPinnedAnnotation, type HoveredItem } from '~state/hover';
 import { createRenderScheduler, type RenderScheduler } from '~render/scheduler';
 import { hitTestGene } from '~render/hit-test/gene-hit-test';
+import { hitTestVariant } from '~render/hit-test/variant-hit-test';
 import { AnnotationTooltip } from './AnnotationTooltip';
 
 /**
@@ -47,13 +48,26 @@ export function GenomeView() {
   let labelCanvasRef: HTMLCanvasElement | undefined;
   let scheduler: RenderScheduler | undefined;
 
+  function hitTestAt(px: number, py: number): HoveredItem | null {
+    const v = viewport();
+    const ts = tracks();
+    const tc = tileCache();
+    // Variant ticks live in their own band; if the pointer is on that
+    // band, the gene hit-test would return null anyway. Order doesn't
+    // matter for correctness — pick variant first as a perf nudge
+    // because its tile partition is cheaper.
+    const variantHit = hitTestVariant({ px, py }, v, ts, tc);
+    if (variantHit) return variantHit;
+    const geneHit = hitTestGene({ px, py }, v, ts, tc);
+    return geneHit;
+  }
+
   function handlePointerMove(e: PointerEvent): void {
     if (!canvasRef) return;
     const rect = canvasRef.getBoundingClientRect();
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;
-    const hit = hitTestGene({ px, py }, viewport(), tracks(), tileCache());
-    setHoveredAnnotation(hit);
+    setHoveredAnnotation(hitTestAt(px, py));
   }
 
   function handlePointerLeave(): void {
@@ -86,9 +100,8 @@ export function GenomeView() {
     const rect = canvasRef.getBoundingClientRect();
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;
-    const hit = hitTestGene({ px, py }, viewport(), tracks(), tileCache());
     // Hit something → pin it. Empty canvas → clear any existing pin.
-    setPinnedAnnotation(hit);
+    setPinnedAnnotation(hitTestAt(px, py));
   }
 
   function handleWheel(e: WheelEvent): void {

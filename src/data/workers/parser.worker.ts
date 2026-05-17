@@ -27,6 +27,8 @@ import * as Comlink from 'comlink';
 import { BamFile } from '@gmod/bam';
 import { BigWig } from '@gmod/bbi';
 import { IndexedFasta } from '@gmod/indexedfasta';
+import { TabixIndexedFile } from '@gmod/tabix';
+import VCFParser from '@gmod/vcf';
 import { CachedBaiFilehandle } from './cached-bai-filehandle';
 import type {
   CoverageTile,
@@ -91,6 +93,7 @@ const COVERAGE_BIN_THRESHOLD = 8192;
 const bamCache = new Map<string, BamFile>();
 const bigWigCache = new Map<string, BigWig>();
 const fastaCache = new Map<string, IndexedFasta>();
+const vcfCache = new Map<string, { tabix: TabixIndexedFile; parser: VCFParser }>();
 
 function getBamFile(bamUrl: string, baiUrl: string): BamFile {
   const key = `${bamUrl}#${baiUrl}`;
@@ -117,6 +120,21 @@ function getBigWig(url: string): BigWig {
     bigWigCache.set(url, f);
   }
   return f;
+}
+
+async function getVcfFile(
+  vcfUrl: string,
+  tbiUrl: string,
+): Promise<{ tabix: TabixIndexedFile; parser: VCFParser }> {
+  const key = `${vcfUrl}#${tbiUrl}`;
+  const hit = vcfCache.get(key);
+  if (hit) return hit;
+  const tabix = new TabixIndexedFile({ url: vcfUrl, tbiUrl });
+  const header = await tabix.getHeader();
+  const parser = new VCFParser({ header, strict: false });
+  const entry = { tabix, parser };
+  vcfCache.set(key, entry);
+  return entry;
 }
 
 function getIndexedFasta(fastaUrl: string, faiUrl: string): IndexedFasta {
@@ -148,11 +166,6 @@ function abortError(): DOMException {
   return new DOMException('aborted', 'AbortError');
 }
 
-function notImplemented(format: string): Error {
-  return new Error(
-    `${format} parsing not implemented yet — see TWO_DAY_SPRINT T1.A.3-5`,
-  );
-}
 
 /**
  * Bridge our port-driven abort flag to a real AbortController. Libraries
@@ -671,6 +684,155 @@ async function runFastaParse(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// VCF parsing
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Encoded variant types — matches DESIGN_SYSTEM §2.2 var-* palette indexes. */
+const VARIANT_SNV = 0;
+const VARIANT_INS = 1;
+const VARIANT_DEL = 2;
+const VARIANT_MNV = 3;
+const VARIANT_SV  = 4;
+
+/** Cap per tile so a dense ClinVar region doesn't dump 100k variants
+ *  into one SoA upload. Visual cap matches the BAM read cap. */
+const MAX_VARIANTS = 50_000;
+
+interface ParsedVariant {
+  pos: number;        // 0-based start
+  ref: string;
+  alt: string;
+  qual: number;
+  type: number;
+}
+
+function classifyVariant(ref: string, alt: string): number {
+  if (alt.length > 0 && alt[0] === '<') return VARIANT_SV;
+  const rL = ref.length;
+  const aL = alt.length;
+  if (rL === 1 && aL === 1) return VARIANT_SNV;
+  if (aL > rL) return VARIANT_INS;
+  if (aL < rL) return VARIANT_DEL;
+  return VARIANT_MNV;
+}
+
+function packVariantTile(
+  variants: ParsedVariant[],
+  req: ParseVcfRequest,
+): VariantTile {
+  variants.sort((a, b) => a.pos - b.pos);
+  const count = Math.min(variants.length, MAX_VARIANTS);
+
+  // String-pool dedup. Most VCF tiles have many repeated REFs (single bases)
+  // and a smaller alt vocab; pooling keeps the transferable payload small.
+  const stringPool: string[] = [];
+  const stringIndex = new Map<string, number>();
+  function intern(s: string): number {
+    const found = stringIndex.get(s);
+    if (found !== undefined) return found;
+    const i = stringPool.length;
+    stringPool.push(s);
+    stringIndex.set(s, i);
+    return i;
+  }
+
+  const positions = new Int32Array(count);
+  const positionsHi = new Int32Array(count); // 0 for autosomes
+  const types = new Uint8Array(count);
+  const refStringIdx = new Uint32Array(count);
+  const altStringIdx = new Uint32Array(count);
+  const quals = new Float32Array(count);
+
+  for (let i = 0; i < count; i++) {
+    const v = variants[i]!;
+    positions[i] = v.pos | 0;
+    types[i] = v.type;
+    refStringIdx[i] = intern(v.ref);
+    altStringIdx[i] = intern(v.alt);
+    quals[i] = v.qual;
+  }
+
+  const binSize = 1024;
+  return {
+    key: `:${req.chrom}:${binSize}:${Math.floor(req.start / binSize)}`,
+    trackId: '',
+    chrom: req.chrom,
+    binSize,
+    binIndex: Math.floor(req.start / binSize),
+    start: BigInt(req.start),
+    end: BigInt(req.end),
+    payload: 'variants',
+    count,
+    positions,
+    positionsHi,
+    types,
+    refStringIdx,
+    altStringIdx,
+    quals,
+    strings: stringPool,
+  };
+}
+
+async function runVcfParse(
+  abortWatcher: { aborted: () => boolean },
+  req: ParseVcfRequest,
+): Promise<VariantTile> {
+  if (abortWatcher.aborted()) throw abortError();
+
+  const { tabix, parser } = await getVcfFile(req.url, req.indexUrl);
+  if (abortWatcher.aborted()) throw abortError();
+
+  const variants: ParsedVariant[] = [];
+  const { signal, stop } = bridgeAbortWatcher(abortWatcher);
+
+  try {
+    await tabix.getLines(req.chrom, req.start, req.end, {
+      signal,
+      lineCallback: (line: string) => {
+        if (variants.length >= MAX_VARIANTS) return;
+        let v;
+        try {
+          v = parser.parseLine(line);
+        } catch {
+          return; // skip malformed lines silently — VCF can have weirdness
+        }
+        if (v.POS === undefined || v.REF === undefined || !v.ALT) return;
+        // VCF POS is 1-based; convert to 0-based for our internal model.
+        const pos0 = v.POS - 1;
+        // One ParsedVariant per ALT allele so multi-allelic sites split
+        // into independent ticks (matches IGV behaviour).
+        const ref = v.REF;
+        const qual = typeof v.QUAL === 'number' ? v.QUAL : 0;
+        for (const alt of v.ALT) {
+          variants.push({
+            pos: pos0,
+            ref,
+            alt,
+            qual,
+            type: classifyVariant(ref, alt),
+          });
+          if (variants.length >= MAX_VARIANTS) break;
+        }
+      },
+    });
+  } catch (err) {
+    if (
+      abortWatcher.aborted() ||
+      (err instanceof Error && err.name === 'AbortError')
+    ) {
+      throw abortError();
+    }
+    throw err;
+  } finally {
+    stop();
+  }
+
+  if (abortWatcher.aborted()) throw abortError();
+
+  return packVariantTile(variants, req);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Comlink-exposed API
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -713,11 +875,18 @@ const api = {
 
   async parseVcfTile(
     abortPort: MessagePort,
-    _req: ParseVcfRequest,
+    req: ParseVcfRequest,
   ): Promise<VariantTile> {
     const w = createAbortWatcher(abortPort);
-    if (w.aborted()) throw abortError();
-    throw notImplemented('VCF');
+    const tile = await runVcfParse(w, req);
+    return Comlink.transfer(tile, [
+      tile.positions.buffer,
+      tile.positionsHi.buffer,
+      tile.types.buffer,
+      tile.refStringIdx.buffer,
+      tile.altStringIdx.buffer,
+      tile.quals.buffer,
+    ]) as VariantTile;
   },
 };
 

@@ -93,7 +93,14 @@ export interface BigWigTrack extends TrackBase {
 
 export interface VcfTrack extends TrackBase {
   kind: 'vcf';
+  /** Tabix index sidecar (.tbi). */
   indexUrl: string;
+  /**
+   * Map the viewport chrom name before sending it to the worker. Many
+   * 1000G / ClinVar VCFs use bare "20" naming; viewport canonicalises to
+   * "chr20". Mirrors BamTrack.chromMap.
+   */
+  chromMap?: 'strip-chr' | 'add-chr';
 }
 
 export interface ReferenceTrack extends TrackBase {

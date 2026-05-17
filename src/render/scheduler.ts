@@ -40,6 +40,7 @@ import {
   createBigWigRenderer,
   createReferenceRenderer,
   createGeneRenderer,
+  createVcfRenderer,
   maxAcrossTiles,
   maxAcrossSignalTiles,
   type PileupRenderer,
@@ -47,6 +48,7 @@ import {
   type BigWigRenderer,
   type ReferenceRenderer,
   type GeneRenderer,
+  type VcfRenderer,
 } from '~render/tracks-render';
 import { drawGeneLabels } from '~render/labels/gene-labels';
 import type {
@@ -58,6 +60,7 @@ import type {
   TileKey,
   TileStatus,
   Tile,
+  VariantTile,
   Viewport,
   TrackConfig,
 } from '~state/types';
@@ -270,6 +273,16 @@ export function createRenderScheduler(
     return r;
   };
 
+  const vcfRenderers = new Map<string, VcfRenderer>();
+  const ensureVcf = (trackId: string): VcfRenderer => {
+    let r = vcfRenderers.get(trackId);
+    if (!r) {
+      r = createVcfRenderer(ctx.gl);
+      vcfRenderers.set(trackId, r);
+    }
+    return r;
+  };
+
   const drawTrack = (
     track: TrackConfig,
     snapshot: ReadonlyMap<TileKey, TileStatus>,
@@ -291,12 +304,14 @@ export function createRenderScheduler(
     const signals: SignalTile[] = [];
     const references: ReferenceTile[] = [];
     const genes: GeneTile[] = [];
+    const variants: VariantTile[] = [];
     for (const tile of trackTiles) {
       if (tile.payload === 'reads') reads.push(tile);
       else if (tile.payload === 'coverage') coverages.push(tile);
       else if (tile.payload === 'signal') signals.push(tile);
       else if (tile.payload === 'reference') references.push(tile);
       else if (tile.payload === 'gene') genes.push(tile);
+      else if (tile.payload === 'variants') variants.push(tile);
     }
 
     const bandHeight = bandHeightFor(track.kind, policy);
@@ -325,6 +340,12 @@ export function createRenderScheduler(
       const renderer = ensureReference(track.id);
       for (let i = 0; i < references.length; i++) {
         renderer.draw(references[i]!, v, yTopPx, bandHeight);
+      }
+    }
+    if (variants.length > 0) {
+      const renderer = ensureVcf(track.id);
+      for (let i = 0; i < variants.length; i++) {
+        renderer.draw(variants[i]!, v, yTopPx, bandHeight);
       }
     }
     if (genes.length > 0) {
@@ -440,11 +461,13 @@ export function createRenderScheduler(
     for (const r of bigwigRenderers.values()) try { r.dispose(); } catch { /* ignore */ }
     for (const r of referenceRenderers.values()) try { r.dispose(); } catch { /* ignore */ }
     for (const r of geneRenderers.values()) try { r.dispose(); } catch { /* ignore */ }
+    for (const r of vcfRenderers.values()) try { r.dispose(); } catch { /* ignore */ }
     pileupRenderers.clear();
     coverageRenderers.clear();
     bigwigRenderers.clear();
     referenceRenderers.clear();
     geneRenderers.clear();
+    vcfRenderers.clear();
     dirty = true;
   });
 
@@ -460,11 +483,13 @@ export function createRenderScheduler(
     for (const r of bigwigRenderers.values()) try { r.dispose(); } catch { /* ignore */ }
     for (const r of referenceRenderers.values()) try { r.dispose(); } catch { /* ignore */ }
     for (const r of geneRenderers.values()) try { r.dispose(); } catch { /* ignore */ }
+    for (const r of vcfRenderers.values()) try { r.dispose(); } catch { /* ignore */ }
     pileupRenderers.clear();
     coverageRenderers.clear();
     bigwigRenderers.clear();
     referenceRenderers.clear();
     geneRenderers.clear();
+    vcfRenderers.clear();
     ctx.dispose();
   };
 

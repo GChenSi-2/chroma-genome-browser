@@ -28,3 +28,8 @@ export {
   assignGeneRows,
   type GeneRenderer,
 } from './gene';
+
+export {
+  createVcfRenderer,
+  type VcfRenderer,
+} from './vcf';

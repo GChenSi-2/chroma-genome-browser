@@ -6,6 +6,7 @@ import type {
   BigWigTrack,
   ReferenceTrack,
   TrackConfig,
+  VcfTrack,
 } from '~state/types';
 export { revokeBlobUrlsFor, revokeAllBlobUrls } from './blob-url-helpers';
 
@@ -32,7 +33,7 @@ export { revokeBlobUrlsFor, revokeAllBlobUrls } from './blob-url-helpers';
  */
 
 type Source = 'file' | 'url';
-type SupportedKind = 'bam' | 'bigwig' | 'reference';
+type SupportedKind = 'bam' | 'bigwig' | 'reference' | 'vcf';
 
 interface AddTrackDialogProps {
   open: boolean;
@@ -43,29 +44,34 @@ const KIND_LABELS: Record<SupportedKind, string> = {
   bam: 'BAM (alignments)',
   bigwig: 'BigWig (signal)',
   reference: 'Reference FASTA',
+  vcf: 'VCF (variants)',
 };
 
 const PRIMARY_ACCEPT: Record<SupportedKind, string> = {
   bam: '.bam',
   bigwig: '.bw,.bigwig',
   reference: '.fa,.fasta,.fna',
+  vcf: '.vcf.gz,.gz',
 };
 
 const SECONDARY_ACCEPT: Record<SupportedKind, string> = {
   bam: '.bai',
   bigwig: '', // no secondary file
   reference: '.fai',
+  vcf: '.tbi,.csi',
 };
 
 function primaryFieldLabel(kind: SupportedKind): string {
   if (kind === 'bam') return 'BAM file';
   if (kind === 'bigwig') return 'BigWig file';
+  if (kind === 'vcf') return 'VCF.gz file';
   return 'FASTA file';
 }
 
 function secondaryFieldLabel(kind: SupportedKind): string {
   if (kind === 'bam') return 'BAI index file (.bai)';
   if (kind === 'reference') return 'FAI index file (.fai)';
+  if (kind === 'vcf') return 'Tabix index file (.tbi)';
   return '';
 }
 
@@ -92,7 +98,7 @@ export function AddTrackDialog(props: AddTrackDialogProps) {
   const [error, setError] = createSignal('');
 
   const needsSecondary = createMemo(
-    () => kind() === 'bam' || kind() === 'reference',
+    () => kind() === 'bam' || kind() === 'reference' || kind() === 'vcf',
   );
 
   function reset(): void {
@@ -139,6 +145,16 @@ export function AddTrackDialog(props: AddTrackDialogProps) {
         url: primary,
         visible: true,
       } satisfies BigWigTrack;
+    }
+    if (chosenKind === 'vcf') {
+      return {
+        id,
+        kind: 'vcf',
+        label: displayLabel,
+        url: primary,
+        indexUrl: secondary,
+        visible: true,
+      } satisfies VcfTrack;
     }
     return {
       id,
@@ -282,6 +298,7 @@ export function AddTrackDialog(props: AddTrackDialogProps) {
                 <option value="bam">{KIND_LABELS.bam}</option>
                 <option value="bigwig">{KIND_LABELS.bigwig}</option>
                 <option value="reference">{KIND_LABELS.reference}</option>
+                <option value="vcf">{KIND_LABELS.vcf}</option>
               </select>
             </div>
 

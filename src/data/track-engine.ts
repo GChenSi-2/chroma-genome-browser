@@ -39,6 +39,7 @@ import type {
   TileKey,
   Tile,
   TrackConfig,
+  VcfTrack,
   Viewport,
 } from '~state/types';
 import {
@@ -373,6 +374,32 @@ function dispatchTrack(
                 chrom: v.chrom,
                 start,
                 end,
+              },
+              signal,
+            ),
+        },
+        c,
+      );
+      return;
+    }
+    case 'vcf': {
+      const vcfTrack = track as VcfTrack;
+      const chromForWorker = mapChrom(v.chrom, vcfTrack.chromMap);
+      runTileDispatch(
+        {
+          trackId: track.id,
+          policy,
+          cacheChrom: v.chrom,
+          range,
+          workerCall: (start, end, signal) =>
+            p.parseVcfTile(
+              {
+                url: vcfTrack.url,
+                indexUrl: vcfTrack.indexUrl,
+                chrom: chromForWorker,
+                start,
+                end,
+                binSize: policy.binSize,
               },
               signal,
             ),

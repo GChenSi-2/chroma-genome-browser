@@ -55,12 +55,22 @@ describe('policyFor', () => {
     expect(p!.tileWidthBp).toBe(span);
   });
 
-  it.each(['vcf', 'bed'] as const)(
+  it.each(['bed'] as const)(
     'returns null for unsupported kind %s',
     (kind) => {
       expect(policyFor(kind, 1000)).toBeNull();
     },
   );
+
+  it('vcf now has a policy matching the BigWig ladder', () => {
+    const p10k = policyFor('vcf', 10_000);
+    expect(p10k).not.toBeNull();
+    expect(p10k!.binSize).toBe(1024);
+    expect(p10k!.tileWidthBp).toBe(32_768);
+    const p1m = policyFor('vcf', 1_000_000);
+    expect(p1m!.binSize).toBe(8192);
+    expect(p1m!.tileWidthBp).toBe(524_288);
+  });
 
   it('every non-vp policy has tileWidthBp >= binSize and an integer ratio', () => {
     for (const kind of ['bam', 'bigwig', 'reference', 'gene'] as const) {

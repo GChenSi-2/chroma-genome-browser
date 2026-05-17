@@ -3,15 +3,18 @@ import {
   hoveredAnnotation,
   pinnedAnnotation,
   setPinnedAnnotation,
-  type HoveredAnnotation,
+  type HoveredGene,
+  type HoveredItem,
+  type HoveredVariant,
+  type VariantKind,
 } from '~state/hover';
 import { viewport } from '~state/viewport';
 import { tracks } from '~state/tracks';
-import type { GeneTrack, TrackConfig } from '~state/types';
+import type { GeneTrack, TrackConfig, VcfTrack } from '~state/types';
 import X from 'lucide-solid/icons/x';
 
 /**
- * Annotation inspector tooltip — two-mode.
+ * Annotation inspector tooltip — two-mode + multi-kind.
  *
  *   Hover mode (transient): brief identity card while pointer is over a
  *     feature. Dismisses when the pointer leaves.
@@ -20,9 +23,10 @@ import X from 'lucide-solid/icons/x';
  *     decisions explained). Dismisses on Esc, on click of empty canvas,
  *     or on close button.
  *
- * The pinned state wins over the hover state — once a user inspects a
- * feature, panning or hovering other features doesn't blow away the
- * pinned card. Their attention is on the pinned item.
+ * Two feature kinds supported today:
+ *   - Gene/transcript/exon (gene track)
+ *   - VCF variant (vcf track)
+ * Each renders WHAT/WHERE/WHY appropriate to its data shape.
  *
  * Pure DOM (Solid). Positions absolutely inside `.chroma-genome-view`.
  */
@@ -54,7 +58,6 @@ function findTrack(trackId: string): TrackConfig | null {
   return tracks().find((t) => t.id === trackId) ?? null;
 }
 
-/** Human-friendly source description for the WHERE pane. */
 function sourceLine(track: TrackConfig): string {
   if (track.kind === 'gene') {
     const g = track as GeneTrack;
@@ -63,6 +66,10 @@ function sourceLine(track: TrackConfig): string {
     }
     return `${g.format ?? 'gene'} · ${g.url}`;
   }
+  if (track.kind === 'vcf') {
+    const v = track as VcfTrack;
+    return `Tabix-indexed VCF · ${v.url}`;
+  }
   return track.url;
 }
 
@@ -70,8 +77,9 @@ function isBlobUrl(url: string): boolean {
   return url.startsWith('blob:');
 }
 
-/** Per-feature "why does this render like that?" explanations. */
-function whyLines(h: HoveredAnnotation): string[] {
+// ── Gene-specific helpers ────────────────────────────────────────────────
+
+function geneWhyLines(h: HoveredGene): string[] {
   const lines: string[] = [];
   lines.push(strandLabel(h.feature.strand));
   if (h.feature.type === 'exon') {
@@ -84,16 +92,51 @@ function whyLines(h: HoveredAnnotation): string[] {
   return lines;
 }
 
+// ── Variant-specific helpers ─────────────────────────────────────────────
+
+const VARIANT_KIND_LABEL: Record<VariantKind, string> = {
+  snv: 'SNV (single-nucleotide variant)',
+  ins: 'insertion',
+  del: 'deletion',
+  mnv: 'MNV (multi-nucleotide variant)',
+  sv:  'structural variant',
+};
+
+const VARIANT_KIND_COLOR: Record<VariantKind, string> = {
+  snv: '#e69f00',
+  ins: '#56b4e9',
+  del: '#cc79a7',
+  mnv: '#009e73',
+  sv:  '#d55e00',
+};
+
+function variantWhyLines(h: HoveredVariant): string[] {
+  const v = h.variant;
+  const out: string[] = [];
+  out.push(`Coloured as ${v.type.toUpperCase()} per DESIGN_SYSTEM §2.2 (${VARIANT_KIND_LABEL[v.type]}).`);
+  if (v.type === 'snv') {
+    out.push(`Single tick: REF "${v.ref}" → ALT "${v.alt}".`);
+  } else if (v.type === 'ins') {
+    out.push(`Inserted ${v.alt.length - v.ref.length} bp after position ${formatPosBp(v.pos)}.`);
+  } else if (v.type === 'del') {
+    out.push(`Deleted ${v.ref.length - v.alt.length} bp starting at position ${formatPosBp(v.pos)}.`);
+  } else if (v.type === 'mnv') {
+    out.push(`Block substitution: REF "${v.ref}" → ALT "${v.alt}", same length.`);
+  } else {
+    out.push(`Symbolic ALT "${v.alt}" indicates a structural variant; bracket coords live in INFO.`);
+  }
+  if (Number.isFinite(v.qual) && v.qual > 0) {
+    out.push(`Quality (PHRED) ${v.qual.toFixed(1)}.`);
+  }
+  return out;
+}
+
 export function AnnotationTooltip() {
-  // Pinned > hover. Hover is what the cursor reports right now; pinned is
-  // the user's anchored choice.
-  const active = createMemo<HoveredAnnotation | null>(
+  const active = createMemo<HoveredItem | null>(
     () => pinnedAnnotation() ?? hoveredAnnotation(),
   );
   const isPinned = createMemo(() => pinnedAnnotation() !== null);
 
-  // Esc anywhere clears the pin (the live hover dismisses on its own
-  // when the pointer leaves).
   function onKeyDown(e: KeyboardEvent): void {
     if (e.key === 'Escape' && pinnedAnnotation() !== null) {
       e.preventDefault();
@@ -117,18 +160,11 @@ export function AnnotationTooltip() {
             classList={{ 'chroma-annotation-tooltip--pinned': pinned }}
             style={{
               left: `${anchorX}px`,
-              // Hover (short card) floats ABOVE the feature; pinned (taller,
-              // multi-section) sits BELOW so its body doesn't overflow the
-              // canvas top edge. CSS handles the actual translate direction
-              // via the `--pinned` class.
               top: pinned ? `${anchorY + h.rectPx.height}px` : `${anchorY}px`,
-              // When pinned the tooltip itself must be clickable (close
-              // button, link-copyable URLs). Hover mode keeps pointer-events
-              // off so the cursor still reaches the underlying feature.
               'pointer-events': pinned ? 'auto' : 'none',
             }}
             role={pinned ? 'dialog' : 'tooltip'}
-            aria-label={pinned ? `Feature inspector: ${h.gene.name || h.gene.id}` : undefined}
+            aria-label={pinned ? 'Feature inspector' : undefined}
           >
             <Show when={pinned}>
               <button
@@ -142,35 +178,69 @@ export function AnnotationTooltip() {
               </button>
             </Show>
 
-            {/* WHAT — identity */}
-            <div class="chroma-annotation-tooltip-name">
-              {h.gene.name || h.gene.id}
-              <span class="chroma-annotation-tooltip-strand">{strandSymbol(h.gene.strand)}</span>
-            </div>
-            <Show when={h.gene.biotype}>
-              <div class="chroma-annotation-tooltip-biotype">{h.gene.biotype}</div>
-            </Show>
-            <Show when={h.feature.type !== 'gene'}>
-              <div class="chroma-annotation-tooltip-child">
-                {h.feature.type}:{' '}
-                <span class="chroma-annotation-tooltip-id">
-                  {h.feature.name || h.feature.id}
-                </span>
-              </div>
-            </Show>
+            {/* WHAT — identity. Kind-specific body. Plain conditional
+                children keep TS happy without the keyed-accessor dance. */}
+            {h.kind === 'gene' && (() => {
+              const g = h as HoveredGene;
+              return (
+                <>
+                  <div class="chroma-annotation-tooltip-name">
+                    {g.gene.name || g.gene.id}
+                    <span class="chroma-annotation-tooltip-strand">{strandSymbol(g.gene.strand)}</span>
+                  </div>
+                  <Show when={g.gene.biotype}>
+                    <div class="chroma-annotation-tooltip-biotype">{g.gene.biotype}</div>
+                  </Show>
+                  <Show when={g.feature.type !== 'gene'}>
+                    <div class="chroma-annotation-tooltip-child">
+                      {g.feature.type}:{' '}
+                      <span class="chroma-annotation-tooltip-id">
+                        {g.feature.name || g.feature.id}
+                      </span>
+                    </div>
+                  </Show>
+                  <div class="chroma-annotation-tooltip-coords">
+                    {viewport().chrom}:{formatPosBp(g.gene.start)}–{formatPosBp(g.gene.end)}
+                    <span class="chroma-annotation-tooltip-span">
+                      {' · '}{formatSpanBp(g.gene.end - g.gene.start)}
+                    </span>
+                  </div>
+                  <Show when={g.gene.id !== g.gene.name}>
+                    <div class="chroma-annotation-tooltip-id">{g.gene.id}</div>
+                  </Show>
+                </>
+              );
+            })()}
 
-            {/* Coordinates */}
-            <div class="chroma-annotation-tooltip-coords">
-              {viewport().chrom}:{formatPosBp(h.gene.start)}–{formatPosBp(h.gene.end)}
-              <span class="chroma-annotation-tooltip-span">
-                {' · '}{formatSpanBp(h.gene.end - h.gene.start)}
-              </span>
-            </div>
-            <Show when={h.gene.id !== h.gene.name}>
-              <div class="chroma-annotation-tooltip-id">{h.gene.id}</div>
-            </Show>
+            {h.kind === 'variant' && (() => {
+              const vh = h as HoveredVariant;
+              const v = vh.variant;
+              return (
+                <>
+                  <div class="chroma-annotation-tooltip-name">
+                    <span
+                      class="chroma-annotation-tooltip-variant-swatch"
+                      style={{ background: VARIANT_KIND_COLOR[v.type] }}
+                      aria-hidden="true"
+                    />
+                    {v.ref || '·'}
+                    <span class="chroma-annotation-tooltip-arrow">→</span>
+                    {v.alt || '·'}
+                    <span class="chroma-annotation-tooltip-variant-kind">{v.type.toUpperCase()}</span>
+                  </div>
+                  <div class="chroma-annotation-tooltip-coords">
+                    {viewport().chrom}:{formatPosBp(v.pos + 1n)}
+                    <Show when={Number.isFinite(v.qual) && v.qual > 0}>
+                      <span class="chroma-annotation-tooltip-span">
+                        {' · QUAL '}{v.qual.toFixed(1)}
+                      </span>
+                    </Show>
+                  </div>
+                </>
+              );
+            })()}
 
-            {/* WHERE + WHY — pinned only. Hover mode keeps the card tight. */}
+            {/* WHERE + WHY — pinned only. */}
             <Show when={pinned}>
               <Show when={track()}>
                 {(tAcc) => {
@@ -191,7 +261,7 @@ export function AnnotationTooltip() {
               </Show>
               <div class="chroma-annotation-tooltip-section">
                 <div class="chroma-annotation-tooltip-section-label">Render</div>
-                <For each={whyLines(h)}>
+                <For each={h.kind === 'gene' ? geneWhyLines(h as HoveredGene) : variantWhyLines(h as HoveredVariant)}>
                   {(line) => (
                     <div class="chroma-annotation-tooltip-why">· {line}</div>
                   )}
