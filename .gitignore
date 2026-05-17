@@ -40,3 +40,7 @@ NEEDS_DEPS.md
 BLOCKED.md
 
 .vercel
+
+# Local promo / marketing assets — typically large media (GIFs, MP4s).
+# Keep them on disk for the author, out of the repo to avoid LFS warnings.
+/promotion/
