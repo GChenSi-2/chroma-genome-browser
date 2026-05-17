@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { adaptContextRange, defaultContextRange } from '~state/context-range';
 import type { Locus } from '~state/types';
 
-const chr20Full = defaultContextRange('chr20'); // 0..64_444_167
+const chr20Full = defaultContextRange('chr20'); // 0..63_025_520
 
 const vp = (start: bigint, end: bigint, chrom: string = 'chr20') => ({
   chrom,
@@ -38,7 +38,7 @@ describe('adaptContextRange', () => {
     expect(next).not.toBeNull();
     // 9 Mb ÁE10 = 90 Mb requested, but chr20 only has 63 Mb ↁEsnaps to full.
     expect(next!.start).toBe(0n);
-    expect(next!.end).toBe(64_444_167n);
+    expect(next!.end).toBe(63_025_520n);
   });
 
   it('re-fits when viewport scrolled outside ctx (drag/jump far away)', () => {
@@ -58,7 +58,7 @@ describe('adaptContextRange', () => {
     const next = adaptContextRange(v, ctx, chr20Full);
     expect(next).not.toBeNull();
     expect(next!.start).toBe(0n);
-    expect(next!.end).toBe(64_444_167n);
+    expect(next!.end).toBe(63_025_520n);
   });
 
   it('clamps the re-fit context against the chromosome start', () => {
@@ -75,7 +75,7 @@ describe('adaptContextRange', () => {
     const v = vp(64_400_000n, 64_410_000n);
     const next = adaptContextRange(v, chr20Full, chr20Full);
     expect(next).not.toBeNull();
-    expect(next!.end).toBe(64_444_167n);
+    expect(next!.end).toBe(63_025_520n);
   });
 
   it('returns full chrom when chrom mismatches', () => {
@@ -85,7 +85,7 @@ describe('adaptContextRange', () => {
     expect(next).not.toBeNull();
     expect(next!.chrom).toBe('chr20');
     expect(next!.start).toBe(0n);
-    expect(next!.end).toBe(64_444_167n);
+    expect(next!.end).toBe(63_025_520n);
   });
 
   it('is a no-op for zero-span viewport (defensive)', () => {

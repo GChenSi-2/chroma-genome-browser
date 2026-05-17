@@ -9,6 +9,7 @@ import { startUrlSync } from '~state/url-sync';
 import { startTrackEngine } from '~data/track-engine';
 import { setTracks, tracks } from '~state/tracks';
 import { setViewport } from '~state/viewport';
+import { loadReferenceAssembly } from '~state/assembly';
 import type { BamTrack, BigWigTrack, GeneTrack, ReferenceTrack, TrackConfig } from '~state/types';
 
 /**
@@ -94,17 +95,18 @@ const DEMO_BAM_HG38: BamTrack = {
 };
 
 /**
- * Ensembl REST gene annotation (GRCh38). Pulls gene + transcript + exon
- * features from the public Ensembl REST API in 1-Mb chunks. CORS-open;
+ * Ensembl REST gene annotation, GRCh37 / hg19. Aligned with the rest of
+ * the demo stack (Broad hg19 FASTA + UCSC hg19 phyloP + 1000G hg19 BAM)
+ * so feature coords match across tracks at the bp level. CORS-open;
  * uses bare chrom names so chromMap='strip-chr'.
  */
 const DEMO_GENES: GeneTrack = {
-  id: 'ensembl-grch38-genes',
+  id: 'ensembl-grch37-genes',
   kind: 'gene',
-  label: 'Ensembl · genes (GRCh38)',
-  url: 'https://rest.ensembl.org',
+  label: 'Ensembl · genes (GRCh37)',
+  url: 'https://grch37.rest.ensembl.org',
   format: 'ensembl-rest',
-  ensemblHost: 'https://rest.ensembl.org',
+  ensemblHost: 'https://grch37.rest.ensembl.org',
   chromMap: 'strip-chr',
   visible: true,
 };
@@ -137,6 +139,21 @@ export default function App() {
         start: 10_000_000n,
         end: 10_010_000n,
       }));
+    }
+
+    // Hydrate the assembly chrom-length table from the first reference
+    // track's `.fai`. Idempotent per URL; the overview bar / clamp math
+    // pick this up reactively via `activeAssembly()`. No-op when no
+    // reference track is loaded; the hg19 built-in fallback covers it.
+    for (const t of tracks()) {
+      if (t.kind === 'reference' && t.visible) {
+        loadReferenceAssembly(t.faiUrl, t.label).catch((err) => {
+          // Non-fatal — the built-in fallback already provides reasonable
+          // chrom lengths. Log once so a real .fai outage is debuggable.
+          console.warn('[assembly] failed to load .fai', t.faiUrl, err);
+        });
+        break;
+      }
     }
   });
 

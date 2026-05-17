@@ -7,7 +7,7 @@
  *
  * Default + adaptation rules:
  *   1. When the viewport's chromosome changes, snap contextRange to the
- *      full chromosome from the built-in hg19 / GRCh37 length table.
+ *      full chromosome from the active assembly (see `~state/assembly`).
  *   2. When the viewport stays on the same chromosome, leave the context
  *      alone — small pans should slide the selection across the bar, not
  *      re-centre the bar under the user's cursor.
@@ -21,65 +21,21 @@
  * selection block would re-centre the context every frame and the
  * selection would feel "stuck" under the cursor.
  *
- * Why a fixed hg19 table for now: we don't have the FASTA / .fai sidecar
- * wired (the Reference track demo is deferred), and IGV's own behaviour
- * is to assume whole-chromosome context unless told otherwise.
+ * Source of chromosome lengths: the `activeAssembly` signal in
+ * `~state/assembly`. Loaded from the reference track's `.fai` index at
+ * boot (or any future reference swap); falls back to a built-in hg19
+ * table until that arrives. Single source of truth — overview ticks and
+ * adapt math both reach into the same signal.
  */
 
 import { createSignal, createEffect, onCleanup } from 'solid-js';
 import type { Locus } from './types';
 import { viewport } from './viewport';
+import { activeAssembly, chromLength } from './assembly';
 
-/**
- * hg19 / GRCh37 and hg38 / GRCh38 chromosome lengths in bp. Source: UCSC
- * chromInfo.txt. The two builds differ by 1-2 % per chromosome, mostly from
- * the GRCh38 alt-contig integration and centromere-region updates. We
- * default to GRCh38 since that's the newer standard; for hg19 demo tracks
- * the difference is small enough that the bar never overshoots noticeably.
- *
- * If a future track needs exact-build precision (e.g. centromere markup),
- * we can extend BamTrack with an `assembly` field and look up the right
- * table per track.
- */
-const HG38_CHROM_LENGTHS: Readonly<Record<string, bigint>> = {
-  chr1: 248_956_422n,
-  chr2: 242_193_529n,
-  chr3: 198_295_559n,
-  chr4: 190_214_555n,
-  chr5: 181_538_259n,
-  chr6: 170_805_979n,
-  chr7: 159_345_973n,
-  chr8: 145_138_636n,
-  chr9: 138_394_717n,
-  chr10: 133_797_422n,
-  chr11: 135_086_622n,
-  chr12: 133_275_309n,
-  chr13: 114_364_328n,
-  chr14: 107_043_718n,
-  chr15: 101_991_189n,
-  chr16: 90_338_345n,
-  chr17: 83_257_441n,
-  chr18: 80_373_285n,
-  chr19: 58_617_616n,
-  chr20: 64_444_167n,
-  chr21: 46_709_983n,
-  chr22: 50_818_468n,
-  chrX: 156_040_895n,
-  chrY: 57_227_415n,
-  chrM: 16_569n,
-};
-
-/** Fallback when the chromosome isn't in our table (alt contigs, decoy, etc.). */
-const FALLBACK_LENGTH = 250_000_000n;
-
-function chromKey(chrom: string): string {
-  return chrom.startsWith('chr') ? chrom : `chr${chrom}`;
-}
-
-/** The full-chrom default context for a chromosome (uses GRCh38 lengths). */
+/** The full-chrom default context, sourced from the active assembly. */
 export function defaultContextRange(chrom: string): Locus {
-  const length = HG38_CHROM_LENGTHS[chromKey(chrom)] ?? FALLBACK_LENGTH;
-  return { chrom, start: 0n, end: length };
+  return { chrom, start: 0n, end: chromLength(chrom) };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -163,9 +119,11 @@ let adaptTimer: ReturnType<typeof setTimeout> | null = null;
 
 createEffect(() => {
   const v = viewport();
+  // Subscribe to assembly so a reference-FASTA load re-anchors the bar.
+  activeAssembly();
   const current = contextRange();
 
-  // Chrom change is immediate — no debounce, no waiting.
+  // Chrom change OR assembly change → snap to the new chrom's full length.
   if (current.chrom !== v.chrom) {
     if (adaptTimer !== null) {
       clearTimeout(adaptTimer);

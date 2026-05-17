@@ -30,9 +30,11 @@ describe('niceInterval', () => {
 describe('formatTickPosition', () => {
   it.each([
     [50_000_000n, 10_000_000, '50 Mb'],
-    [50_020_000n, 20_000,     '50.02 Mb'],
     [50_500_000n, 500_000,    '50.5 Mb'],
-    [120_000n,    20_000,     '0.12 Mb'],   // 100kb interval ⇒ Mb with 1 dec
+    // Mb-scale position with a sub-Mb step: stay in Mb, just add precision.
+    [50_020_000n, 20_000,     '50.02 Mb'],
+    // Sub-Mb position with a kb step: stay in kb (small-contig case).
+    [120_000n,    20_000,     '120 kb'],
     [12_000n,     2_000,      '12 kb'],
     [500n,        100,        '500'],
   ])('bp=%s interval=%i ⇒ "%s"', (bp, interval, want) => {
@@ -41,17 +43,20 @@ describe('formatTickPosition', () => {
 });
 
 describe('computeTicks', () => {
-  it('chr20 overview produces 10-Mb ticks at 10..60', () => {
+  it('chr20 overview produces 10-Mb ticks at 10..50 (hg19)', () => {
+    // chr20 hg19 = 63.0 Mb. With default edgeFraction=0.05, the 60-Mb tick
+    // sits at 60/63 ≈ 0.952 — just past the 0.95 edge boundary, so it's
+    // dropped to avoid colliding with the right-edge total-length label.
     const ticks = computeTicks(
-      { chrom: 'chr20', start: 0n, end: 64_444_167n },
+      { chrom: 'chr20', start: 0n, end: 63_025_520n },
       7,
     );
     expect(ticks.map((t) => Number(t.posBp))).toEqual([
-      10_000_000, 20_000_000, 30_000_000, 40_000_000, 50_000_000, 60_000_000,
+      10_000_000, 20_000_000, 30_000_000, 40_000_000, 50_000_000,
     ]);
     expect(ticks[0]!.label).toBe('10 Mb');
-    expect(ticks[5]!.label).toBe('60 Mb');
-    expect(ticks[0]!.fraction).toBeCloseTo(10_000_000 / 64_444_167, 5);
+    expect(ticks[ticks.length - 1]!.label).toBe('50 Mb');
+    expect(ticks[0]!.fraction).toBeCloseTo(10_000_000 / 63_025_520, 5);
   });
 
   it('local 100-kb context around 50 Mb produces 20-kb ticks', () => {

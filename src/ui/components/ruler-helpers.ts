@@ -43,10 +43,20 @@ export function niceInterval(spanBp: number, targetCount: number = 5): number {
  */
 export function formatTickPosition(bp: bigint, intervalBp: number): string {
   const n = Number(bp);
-  if (intervalBp >= 1_000_000) return `${(n / 1_000_000).toFixed(0)} Mb`;
-  if (intervalBp >= 100_000) return `${(n / 1_000_000).toFixed(1)} Mb`;
-  if (intervalBp >= 10_000) return `${(n / 1_000_000).toFixed(2)} Mb`;
-  if (intervalBp >= 1_000) return `${(n / 1_000).toFixed(0)} kb`;
+  // Unit is driven by POSITION magnitude, precision by INTERVAL granularity.
+  //   - Mb-scale positions (≥ 1 Mb) always read in Mb; sub-Mb steps just add
+  //     decimals (50_020_000 @ 20 kb → "50.02 Mb").
+  //   - Sub-Mb positions (a small contig, or near contig start) read in kb,
+  //     so a 100 kb hg19 alt shows "20 kb / 40 kb" not "0.02 Mb / 0.04 Mb".
+  if (n >= 1_000_000) {
+    if (intervalBp >= 1_000_000) return `${(n / 1_000_000).toFixed(0)} Mb`;
+    if (intervalBp >= 100_000) return `${(n / 1_000_000).toFixed(1)} Mb`;
+    if (intervalBp >= 10_000) return `${(n / 1_000_000).toFixed(2)} Mb`;
+    return `${(n / 1_000_000).toFixed(3)} Mb`;
+  }
+  if (n >= 1_000 || intervalBp >= 1_000) {
+    return `${Math.round(n / 1_000)} kb`;
+  }
   return `${n}`;
 }
 

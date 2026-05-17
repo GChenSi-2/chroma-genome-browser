@@ -7,7 +7,7 @@ import {
 } from '~state/viewport-actions';
 import type { Locus, Viewport } from '~state/types';
 
-const RANGE: Locus = { chrom: 'chr20', start: 0n, end: 64_444_167n };
+const RANGE: Locus = { chrom: 'chr20', start: 0n, end: 63_025_520n };
 
 const vp = (start: bigint, end: bigint): Viewport => ({
   chrom: 'chr20',
@@ -33,7 +33,7 @@ describe('clampViewportToContext', () => {
   it('shifts a viewport that ends past the range ceiling', () => {
     const v = vp(64_000_000n, 65_000_000n);
     const out = clampViewportToContext(v, RANGE);
-    expect(out.end).toBe(64_444_167n);
+    expect(out.end).toBe(63_025_520n);
     expect(out.end - out.start).toBe(1_000_000n);
   });
 
@@ -61,7 +61,7 @@ describe('panBpWithin', () => {
   it('clamps at the right edge', () => {
     const v = vp(62_000_000n, 63_000_000n);
     const out = panBpWithin(v, 5_000_000n, RANGE);
-    expect(out.end).toBe(64_444_167n);
+    expect(out.end).toBe(63_025_520n);
     expect(out.end - out.start).toBe(1_000_000n);
   });
 
@@ -103,7 +103,7 @@ describe('resizeViewportEdge', () => {
   it('clamps end against range ceiling', () => {
     const v = vp(63_000_000n, 63_010_000n);
     const out = resizeViewportEdge(v, 'end', 999_999_999n, RANGE);
-    expect(out.end).toBe(64_444_167n);
+    expect(out.end).toBe(63_025_520n);
   });
 });
 
