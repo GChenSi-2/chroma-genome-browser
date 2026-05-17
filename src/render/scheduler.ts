@@ -90,10 +90,6 @@ function tileOverlapsViewport(tile: Tile, v: Viewport): boolean {
   return tile.chrom === v.chrom && tile.end > v.start && tile.start < v.end;
 }
 
-function absBig(x: bigint): bigint {
-  return x < 0n ? -x : x;
-}
-
 /**
  * Pick the tiles the renderer should draw for this track this frame.
  *
@@ -108,13 +104,56 @@ function absBig(x: bigint): bigint {
  *      `stale` (different binSize OR tileWidthBp, but the data is still
  *      valid genomic content for the visible region).
  *   3. If we have anything exact, return only exact — never mix.
- *   4. Otherwise return a bounded stale subset so the band keeps showing
- *      data until the new fetch resolves.
+ *   4. Otherwise greedy-cover the viewport with the smallest set of stale
+ *      tiles. A single closest-start stale tile only covers PART of the
+ *      viewport after a multi-pixel pan or any zoom-out — drawing only
+ *      that one leaves the rest of the band visibly empty. The greedy
+ *      cover picks left-end and right-end stale tiles so the union spans
+ *      as much of the viewport as the cache has data for. Gaps where no
+ *      stale tile lives stay empty (honest signal — no fake data).
  *
- * Bound on the stale fallback keeps cross-zoom transitions from
- * dumping hundreds of finer-binSize tiles into one frame.
+ * Bound on the stale fallback keeps cross-zoom transitions from dumping
+ * dozens of finer-binSize tiles into one frame.
  */
-const MAX_STALE_TILES = 4;
+const MAX_STALE_TILES = 6;
+
+/**
+ * Greedy interval cover for `[v.start, v.end]`. Given candidate tiles
+ * (already filtered to overlap the viewport), pick the minimum subset
+ * whose union extends the covered range as far as possible without
+ * exceeding `maxCount`. Classic greedy: sort by `start`, walk left to
+ * right, take a tile only if it extends the running `covered` pointer.
+ *
+ * Tile reads carry absolute genomic coords, so two stale tiles that
+ * overlap will simply re-draw shared reads at the same screen X — for
+ * our edge-pan use case the overlap region is the previous viewport's
+ * leftover data, which is what we wanted on screen anyway.
+ */
+function greedyCoverStale(
+  candidates: Tile[],
+  v: Viewport,
+  maxCount: number,
+): Tile[] {
+  if (candidates.length <= 1) return candidates;
+  const sorted = candidates.slice().sort((a, b) => {
+    if (a.start < b.start) return -1;
+    if (a.start > b.start) return 1;
+    // Same start → prefer the wider tile so we make more coverage per pick.
+    return Number((b.end - b.start) - (a.end - a.start));
+  });
+
+  let covered = v.start;
+  const out: Tile[] = [];
+  for (const t of sorted) {
+    if (out.length >= maxCount) break;
+    // Skip tiles entirely behind the covered range — they add nothing.
+    if (t.end <= covered) continue;
+    out.push(t);
+    if (t.end > covered) covered = t.end;
+    if (covered >= v.end) break;
+  }
+  return out;
+}
 
 function collectTilesForTrack(
   snapshot: ReadonlyMap<TileKey, TileStatus>,
@@ -133,20 +172,16 @@ function collectTilesForTrack(
 
     if (policy.vp) {
       // vp: single tile per viewport. Exact = same span AND same start;
-      // stale = same span, different start (typical: pan by a few px
-      // before the new fetch lands).
-      if (Number(tile.end - tile.start) !== policy.tileWidthBp) {
-        stale.push(tile);
-        continue;
-      }
-      if (tile.start === v.start && tile.end === v.end) {
+      // anything else with overlap is a stale candidate.
+      if (Number(tile.end - tile.start) === policy.tileWidthBp &&
+          tile.start === v.start && tile.end === v.end) {
         exact.push(tile);
       } else {
         stale.push(tile);
       }
     } else {
       // Tile-binning. Exact = same binSize and tileWidthBp; stale =
-      // anything else (different zoom level cached from before this jump).
+      // anything else (e.g. tiles cached from a different zoom level).
       if (
         tile.binSize === policy.binSize &&
         Number(tile.end - tile.start) === policy.tileWidthBp
@@ -159,31 +194,14 @@ function collectTilesForTrack(
   }
 
   if (exact.length > 0) return exact;
-
   if (stale.length === 0) return stale;
 
-  if (policy.vp) {
-    // For vp, pick the single closest-start tile so we draw only one band
-    // of stale reads (drawing two stale tiles overlapping at the same Y
-    // would double-stamp the same reads at different X offsets).
-    stale.sort((a, b) =>
-      Number(absBig(a.start - v.start) - absBig(b.start - v.start)),
-    );
-    return stale.slice(0, 1);
-  }
-
-  // Coverage / signal / reference / gene: cap the stale fan-out and prefer
-  // tiles whose midpoint is closest to the viewport midpoint.
-  if (stale.length > MAX_STALE_TILES) {
-    const vMid = (v.start + v.end) / 2n;
-    stale.sort((a, b) => {
-      const am = (a.start + a.end) / 2n;
-      const bm = (b.start + b.end) / 2n;
-      return Number(absBig(am - vMid) - absBig(bm - vMid));
-    });
-    return stale.slice(0, MAX_STALE_TILES);
-  }
-  return stale;
+  // Stale fallback: greedy cover so a pan that shifts the viewport past
+  // the cached tile's range still shows reads on BOTH sides (one stale
+  // tile from before the pan, plus any stale tile from after, if cached).
+  // Same algorithm for vp and tile-binning — the latter benefits from it
+  // at zoom transitions too.
+  return greedyCoverStale(stale, v, MAX_STALE_TILES);
 }
 
 /** Test-only re-export. Not part of the runtime public surface; the

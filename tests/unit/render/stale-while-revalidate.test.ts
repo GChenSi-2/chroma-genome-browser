@@ -85,15 +85,35 @@ describe('collectTilesForTrack — vp mode (BAM pileup)', () => {
     expect(out[0]!.start).toBe(10_000_000n); // exact
   });
 
-  it('picks the closest-start stale tile when multiple overlap', () => {
-    const farLeft = makeReadTile(9_990_000n, 10_000_000n - 1n, 'far-left');
-    const close = makeReadTile(9_999_000n, 10_009_000n, 'close');
-    const farRight = makeReadTile(10_005_000n, 10_015_000n, 'far-right');
-    const v = { ...VIEWPORT, start: 10_000_001n, end: 10_010_001n };
-    const out = _collectTilesForTrack(snap(farLeft, close, farRight), 'bam', v, VP_POLICY);
-    expect(out).toHaveLength(1);
-    // closest start to 10_000_001: 9_999_000 (delta 1001) — wins over 10_005_000 (4999).
-    expect(out[0]!.start).toBe(9_999_000n);
+  it('greedy-covers the viewport with left- AND right-side stale tiles', () => {
+    // A pan to the right: viewport now starts halfway into the old tile's
+    // range AND extends into territory only the next-region cached tile
+    // covers. Returning just one stale tile would leave the other half of
+    // the band empty — the user's reported flicker.
+    const leftCached = makeReadTile(9_995_000n, 10_005_000n, 'left'); // covers viewport's left half
+    const rightCached = makeReadTile(10_005_000n, 10_015_000n, 'right'); // covers viewport's right half
+    const v = { ...VIEWPORT, start: 10_000_000n, end: 10_010_000n };
+    const out = _collectTilesForTrack(snap(leftCached, rightCached), 'bam', v, VP_POLICY);
+
+    // Both tiles together cover the viewport — the greedy cover picks both.
+    expect(out).toHaveLength(2);
+    const starts = new Set(out.map((t) => t.start));
+    expect(starts.has(9_995_000n)).toBe(true);
+    expect(starts.has(10_005_000n)).toBe(true);
+  });
+
+  it('greedy cover stops once the viewport is covered (no over-pick)', () => {
+    // Three candidates; the leftmost two together already cover the
+    // viewport, so the third should be dropped.
+    const a = makeReadTile(9_990_000n, 10_005_000n, 'a');
+    const b = makeReadTile(10_004_000n, 10_012_000n, 'b');
+    const c = makeReadTile(10_006_000n, 10_011_000n, 'c-redundant');
+    const v = { ...VIEWPORT, start: 10_000_000n, end: 10_010_000n };
+    const out = _collectTilesForTrack(snap(a, b, c), 'bam', v, VP_POLICY);
+    expect(out.length).toBeLessThanOrEqual(2);
+    // The redundant 'c' tile (starts AFTER the running covered pointer
+    // already reached its end) must be skipped.
+    expect(out.find((t) => t.key === 'c-redundant')).toBeUndefined();
   });
 
   it('returns [] when nothing overlaps', () => {
@@ -122,8 +142,10 @@ describe('collectTilesForTrack — tile-binning mode (coverage / signal)', () =>
   });
 
   it('caps stale fan-out so a zoom-out doesn\'t dump dozens of tiles at once', () => {
-    // 10 cached tiles, none matching the coverage-policy width — all stale.
-    const many = Array.from({ length: 10 }, (_, i) =>
+    // 30 cached tiles that all overlap the viewport but with random
+    // shifts — greedy cover should pick at most MAX_STALE_TILES (6) of
+    // them, choosing those that extend the running covered pointer.
+    const many = Array.from({ length: 30 }, (_, i) =>
       makeCoverageTile(
         9_900_000n + BigInt(i * 50_000),
         9_900_000n + BigInt((i + 1) * 50_000),
@@ -132,7 +154,7 @@ describe('collectTilesForTrack — tile-binning mode (coverage / signal)', () =>
       ),
     );
     const out = _collectTilesForTrack(snap(...many), 'bam', VIEWPORT, COVERAGE_POLICY);
-    // MAX_STALE_TILES = 4 per the scheduler.
-    expect(out.length).toBeLessThanOrEqual(4);
+    // MAX_STALE_TILES = 6 per the scheduler.
+    expect(out.length).toBeLessThanOrEqual(6);
   });
 });
