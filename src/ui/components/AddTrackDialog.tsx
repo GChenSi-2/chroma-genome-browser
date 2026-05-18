@@ -95,6 +95,12 @@ export function AddTrackDialog(props: AddTrackDialogProps) {
   const [primaryFileName, setPrimaryFileName] = createSignal('');
   const [secondaryFileName, setSecondaryFileName] = createSignal('');
 
+  // Chrom-name mapping: most public BAM / VCF distros (1000G, GIAB,
+  // ClinVar GRCh37) use bare "20" naming, but the viewport canonicalises
+  // to "chr20" (UCSC convention). This checkbox strips the chr-prefix
+  // before sending the chrom to the worker.
+  const [stripChr, setStripChr] = createSignal(false);
+
   const [error, setError] = createSignal('');
 
   const needsSecondary = createMemo(
@@ -109,6 +115,7 @@ export function AddTrackDialog(props: AddTrackDialogProps) {
     setSecondaryUrl('');
     setPrimaryFileName('');
     setSecondaryFileName('');
+    setStripChr(false);
     setError('');
     if (primaryFileInput) primaryFileInput.value = '';
     if (secondaryFileInput) secondaryFileInput.value = '';
@@ -135,6 +142,7 @@ export function AddTrackDialog(props: AddTrackDialogProps) {
         url: primary,
         indexUrl: secondary,
         visible: true,
+        ...(stripChr() ? { chromMap: 'strip-chr' as const } : {}),
       } satisfies BamTrack;
     }
     if (chosenKind === 'bigwig') {
@@ -154,6 +162,7 @@ export function AddTrackDialog(props: AddTrackDialogProps) {
         url: primary,
         indexUrl: secondary,
         visible: true,
+        ...(stripChr() ? { chromMap: 'strip-chr' as const } : {}),
       } satisfies VcfTrack;
     }
     return {
@@ -387,6 +396,25 @@ export function AddTrackDialog(props: AddTrackDialogProps) {
                 onInput={(e) => setLabel((e.target as HTMLInputElement).value)}
               />
             </div>
+
+            <Show when={kind() === 'bam' || kind() === 'vcf'}>
+              <div class="chroma-modal-field chroma-modal-checkbox-field">
+                <label class="chroma-modal-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={stripChr()}
+                    onChange={(e) =>
+                      setStripChr((e.target as HTMLInputElement).checked)
+                    }
+                  />
+                  Strip "chr" prefix from chromosome names
+                </label>
+                <div class="chroma-modal-hint">
+                  Check this if your file uses "20" instead of "chr20" — common for
+                  1000G, GIAB GRCh37, ClinVar GRCh37 distributions.
+                </div>
+              </div>
+            </Show>
 
             <Show when={error()}>
               <div class="chroma-modal-error" role="alert">{error()}</div>

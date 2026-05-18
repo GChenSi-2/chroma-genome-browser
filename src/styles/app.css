@@ -915,6 +915,23 @@
   background: var(--accent-soft);
 }
 
+.chroma-modal-checkbox-field {
+  margin-top: -4px;
+}
+
+.chroma-modal-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 11px / 1.4 var(--font-ui);
+  color: var(--ink-primary);
+  cursor: pointer;
+}
+
+.chroma-modal-checkbox input[type="checkbox"] {
+  margin: 0;
+}
+
 .chroma-modal-error {
   color: var(--danger);
   font: 11px / 1.4 var(--font-ui);
